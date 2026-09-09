@@ -207,21 +207,21 @@
 
     <!-- Input area -->
     <div class="shrink-0 border-t border-slate-200 dark:border-slate-800 p-4">
-      <div class="max-w-3xl mx-auto rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950">
-        <div class="flex items-end gap-2 px-3 py-2">
+      <div class="max-w-3xl mx-auto rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 focus-within:border-indigo-400 dark:focus-within:border-indigo-500 transition-colors">
+        <div class="flex items-center gap-1.5 px-2.5 py-2.5">
           <button @click="triggerFileInput" :disabled="streaming" title="Attach file"
-            class="p-1.5 text-slate-400 hover:text-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-            <icon name="Paperclip" :size="18"></icon>
+            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            <icon name="Paperclip" :size="17"></icon>
           </button>
           <textarea ref="inputArea" v-model="inputText" rows="1"
             :placeholder="currentChat ? 'Message...' : 'Select or start a chat first'"
             :disabled="!currentChat || streaming"
             @keydown.enter.exact.prevent="sendMessage"
             @input="autoResizeInput"
-            class="autosize flex-1 bg-transparent focus:outline-none text-sm py-1 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
+            class="autosize flex-1 bg-transparent focus:outline-none text-sm leading-6 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
           <button @click="sendMessage" :disabled="!currentChat || streaming || (!inputText.trim() && !attachments.length)"
-            class="p-1.5 rounded-lg bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 transition-colors">
-            <icon name="Send" :size="18"></icon>
+            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
+            <icon name="Send" :size="17"></icon>
           </button>
         </div>
       </div>
