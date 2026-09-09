@@ -193,3 +193,18 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * Multi-device synchronization using Origin Private File System (OPFS) combined with WebDAV or S3-compatible APIs (Google Drive, OneDrive, AWS, self-hosted).
   * Syncs individual chat files rather than a monolithic database to gracefully handle offline usage and merge conflicts.
   * Zero-trust architecture: all synced data is encrypted client-side (AES-GCM) before leaving the browser.
+
+---
+
+## 4. Architecture Constraints
+
+These rules are non-negotiable for all future development iterations and must be enforced at every phase.
+
+* **Export/Import Parity:** Every setting and schema change must be fully reflected in the JSON export/import pipeline. No setting may exist that cannot round-trip through a backup file.
+* **Remote Sync Coverage:** Every setting and piece of user content must be included in the remote sync payload when a remote storage target is configured. Partial sync is not permitted.
+* **Minimal HTML Footprint:** `index.html` must remain as small as possible. Heavy libraries, renderers, and optional features must be loaded dynamically from CDNs at runtime — never bundled inline.
+* **Pinned CDN Versions:** All CDN dependencies must reference a specific, immutable version (e.g., `@1.2.3`). Unpinned or `@latest` references are prohibited to prevent upstream breaking changes.
+* **Offline Resilience:** Core functionality must remain operational without network access. CDN-loaded assets must degrade gracefully or be cached; the user must never be left with a broken interface due to a failed CDN fetch.
+* **Local Storage as Source of Truth:** IndexedDB is the canonical data store. Remote storage is a synchronization target only — it never overrides local state without explicit user action.
+* **Mandatory Client-Side Encryption:** Everything synced to remote storage must be encrypted client-side (AES-GCM via Web Crypto API) before transmission. No plaintext user data may leave the browser.
+* **Native-First Dependencies:** Prefer native browser APIs and ES module patterns over adding new external libraries. Every new dependency must be justified against an equivalent native implementation.
