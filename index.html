@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calyx — AI Chat</title>
+
+<!-- Tailwind CSS (Runtime) -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @custom-variant dark (&:where(.dark, .dark *));
+</style>
+
+<!-- Vue 3 (Global build, includes template compiler) -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+
+<!-- Dexie.js (IndexedDB wrapper) -->
+<script src="https://cdn.jsdelivr.net/npm/dexie@4.0.8/dist/dexie.js"></script>
+
+<!-- Markdown rendering + sanitization + code highlighting -->
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+
+<!-- Icons -->
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.462.0/dist/umd/lucide.js"></script>
+
+<!-- PDF parsing (wired in Phase 5) -->
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.min.js"></script>
+
+<style>
+  /* Prevent flash of unstyled content before Vue mounts */
+  [v-cloak] { display: none !important; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(120,120,120,.4); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(120,120,120,.6); }
+
+  textarea.autosize { resize: none; overflow-y: auto; max-height: 240px; }
+
+  /* Markdown prose styles for assistant messages */
+  .prose-message { line-height: 1.65; }
+  .prose-message p { margin: 0 0 0.6em; }
+  .prose-message p:last-child { margin-bottom: 0; }
+  .prose-message h1,.prose-message h2,.prose-message h3,
+  .prose-message h4,.prose-message h5,.prose-message h6 {
+    font-weight: 600; margin: 0.8em 0 0.3em;
+  }
+  .prose-message h1 { font-size: 1.15em; }
+  .prose-message h2 { font-size: 1.05em; }
+  .prose-message h3 { font-size: 1em; }
+  .prose-message ul,.prose-message ol { margin: 0.4em 0 0.6em 1.2em; padding: 0; }
+  .prose-message li { margin-bottom: 0.2em; }
+  .prose-message ul { list-style-type: disc; }
+  .prose-message ol { list-style-type: decimal; }
+  .prose-message code:not(pre code) {
+    background: rgba(120,120,120,.15);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.875em;
+    font-family: ui-monospace, monospace;
+  }
+  .prose-message pre {
+    border-radius: 8px;
+    margin: 0.5em 0;
+    overflow-x: auto;
+    font-size: 0.82em;
+  }
+  .prose-message pre code { background: none; padding: 0; }
+  .prose-message blockquote {
+    border-left: 3px solid rgba(99,102,241,.5);
+    margin: 0.5em 0;
+    padding: 0.2em 0.8em;
+    color: inherit;
+    opacity: 0.8;
+  }
+  .prose-message a { color: #818cf8; text-decoration: underline; }
+  .prose-message table { border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 0.875em; }
+  .prose-message th,.prose-message td { border: 1px solid rgba(120,120,120,.3); padding: 4px 8px; text-align: left; }
+  .prose-message hr { border: none; border-top: 1px solid rgba(120,120,120,.25); margin: 0.6em 0; }
+
+  /* Bounce animation for streaming dots */
+  @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  .animate-bounce { animation: bounce 1s infinite; }
+</style>
+</head>
+<body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 antialiased">
+
+<div id="app" v-cloak class="flex h-screen w-screen overflow-hidden">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="flex flex-col w-72 shrink-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800">
+
+    <div class="p-3 flex flex-col gap-2">
+      <button @click="createChat"
+        class="flex items-center gap-2 justify-center rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-3 py-2 transition-colors">
+        <icon name="Plus" :size="16"></icon>
+        New Chat
+      </button>
+
+      <div class="relative">
+        <icon name="Search" :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400"></icon>
+        <input type="text" v-model.trim="searchQuery" placeholder="Search chats..."
+          class="w-full pl-8 pr-2 py-1.5 text-sm rounded-lg bg-slate-200/70 dark:bg-slate-800 border border-transparent focus:border-indigo-500 focus:outline-none placeholder:text-slate-400">
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto px-2 pb-2">
+
+      <template v-if="pinnedChats.length">
+        <div class="px-2 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pinned</div>
+        <chat-list-item v-for="chat in pinnedChats" :key="'p'+chat.id" :chat="chat" :active="chat.id === currentChatId"
+          @select="selectChat" @rename="renameChat" @toggle-pin="togglePin" @delete="deleteChat"></chat-list-item>
+      </template>
+
+      <div class="px-2 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Recent</div>
+      <chat-list-item v-for="chat in unpinnedChats" :key="'u'+chat.id" :chat="chat" :active="chat.id === currentChatId"
+        @select="selectChat" @rename="renameChat" @toggle-pin="togglePin" @delete="deleteChat"></chat-list-item>
+
+      <div v-if="!pinnedChats.length && !unpinnedChats.length" class="px-2 py-6 text-center text-xs text-slate-400">
+        No chats found.
+      </div>
+    </div>
+
+    <div class="p-2 border-t border-slate-200 dark:border-slate-800 flex gap-1">
+      <button @click="exportData" title="Export data"
+        class="flex-1 flex items-center gap-2 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-sm px-3 py-2 transition-colors">
+        <icon name="Download" :size="16"></icon>
+        Export
+      </button>
+      <button @click="showSettings = true" title="Settings"
+        class="flex-1 flex items-center gap-2 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-sm px-3 py-2 transition-colors">
+        <icon name="Settings" :size="16"></icon>
+        Settings
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ CHAT VIEW ============ -->
+  <main class="flex-1 flex flex-col min-w-0">
+
+    <!-- Header -->
+    <header class="h-14 shrink-0 flex items-center gap-2 px-4 border-b border-slate-200 dark:border-slate-800">
+      <template v-if="currentChat">
+        <input v-if="editingTitle" v-model.trim="titleDraft" @keyup.enter="commitTitle" @keyup.escape="editingTitle = false"
+          @blur="commitTitle" ref="titleInput"
+          class="flex-1 bg-transparent border-b border-indigo-500 focus:outline-none text-base font-medium">
+        <h1 v-else @dblclick="startEditTitle" class="flex-1 text-base font-medium truncate cursor-text" :title="currentChat.title">
+          {{ currentChat.title }}
+        </h1>
+        <button @click="togglePin(currentChat)" class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800"
+          :class="currentChat.isPinned ? 'text-indigo-500' : 'text-slate-400'" title="Pin chat">
+          <icon name="Pin" :size="18"></icon>
+        </button>
+      </template>
+      <template v-else>
+        <h1 class="flex-1 text-base font-medium text-slate-400">Select or start a chat</h1>
+      </template>
+
+      <button @click="toggleTheme" class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400" title="Toggle theme">
+        <icon :name="settings.theme === 'dark' ? 'Sun' : 'Moon'" :size="18"></icon>
+      </button>
+    </header>
+
+    <!-- Message stream -->
+    <div class="flex-1 overflow-y-auto px-4 py-6" ref="messageStream">
+      <div class="max-w-3xl mx-auto flex flex-col gap-4">
+        <div v-if="!currentChat" class="flex flex-col items-center justify-center h-full text-slate-400 gap-2 py-24">
+          <icon name="MessageSquare" :size="36"></icon>
+          <p class="text-sm">Start a new conversation from the sidebar.</p>
+        </div>
+        <div v-else-if="!messages.length && !streaming" class="flex flex-col items-center justify-center text-slate-400 gap-2 py-24">
+          <icon name="Sparkles" :size="36"></icon>
+          <p class="text-sm">Send a message to begin.</p>
+        </div>
+
+        <message-bubble v-for="msg in messages" :key="msg.id" :msg="msg"></message-bubble>
+
+        <!-- Streaming assistant bubble -->
+        <div v-if="streaming" class="flex justify-start">
+          <div class="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800">
+            <div v-if="streamingContent" class="prose-message" v-html="renderMarkdown(streamingContent)"></div>
+            <span v-else class="flex gap-1 items-center text-slate-400">
+              <span class="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:0ms"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:150ms"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:300ms"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Attachment previews -->
+    <div v-if="attachments.length" class="shrink-0 px-4 pt-2">
+      <div class="max-w-3xl mx-auto flex flex-wrap gap-2">
+        <div v-for="(att, i) in attachments" :key="i"
+          class="relative flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-xs">
+          <icon :name="att.type === 'image' ? 'Image' : 'FileText'" :size="13" class="text-indigo-500"></icon>
+          <span class="max-w-[120px] truncate">{{ att.name }}</span>
+          <button @click="removeAttachment(i)" class="ml-0.5 text-slate-400 hover:text-red-500">
+            <icon name="X" :size="12"></icon>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="shrink-0 border-t border-slate-200 dark:border-slate-800 p-4">
+      <div class="max-w-3xl mx-auto rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950">
+        <div class="flex items-end gap-2 px-3 py-2">
+          <button @click="triggerFileInput" :disabled="streaming" title="Attach file"
+            class="p-1.5 text-slate-400 hover:text-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            <icon name="Paperclip" :size="18"></icon>
+          </button>
+          <textarea ref="inputArea" v-model="inputText" rows="1"
+            :placeholder="currentChat ? 'Message...' : 'Select or start a chat first'"
+            :disabled="!currentChat || streaming"
+            @keydown.enter.exact.prevent="sendMessage"
+            @input="autoResizeInput"
+            class="autosize flex-1 bg-transparent focus:outline-none text-sm py-1 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
+          <button @click="sendMessage" :disabled="!currentChat || streaming || (!inputText.trim() && !attachments.length)"
+            class="p-1.5 rounded-lg bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 transition-colors">
+            <icon name="Send" :size="18"></icon>
+          </button>
+        </div>
+      </div>
+      <input ref="fileInput" type="file" multiple accept="image/*,.pdf,.txt" class="hidden" @change="handleFiles">
+    </div>
+  </main>
+
+  <!-- ============ SETTINGS MODAL ============ -->
+  <settings-modal v-if="showSettings" :settings="settings" @close="showSettings = false" @update="saveSetting"></settings-modal>
+
+  <!-- ============ TOASTS ============ -->
+  <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+    <div v-for="t in toasts" :key="t.id"
+      class="pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium shadow-lg transition-all"
+      :class="t.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900'">
+      <icon :name="t.type === 'error' ? 'AlertCircle' : 'CheckCircle'" :size="15"></icon>
+      {{ t.message }}
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ COMPONENT TEMPLATES ============ -->
+
+<script type="text/x-template" id="settings-modal-template">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="$emit('close')">
+    <div class="w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 shadow-xl">
+
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+        <h2 class="text-base font-semibold">Settings</h2>
+        <button @click="$emit('close')" class="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800">
+          <icon name="X" :size="18"></icon>
+        </button>
+      </div>
+
+      <div class="p-5 flex flex-col gap-5 text-sm">
+
+        <!-- Theme -->
+        <div>
+          <label class="block font-medium mb-1">Theme</label>
+          <select :value="settings.theme" @change="$emit('update', 'theme', $event.target.value)"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+
+        <!-- Default provider / model -->
+        <div>
+          <label class="block font-medium mb-1">Default Provider</label>
+          <select :value="settings.selectedProvider" @change="$emit('update', 'selectedProvider', $event.target.value)"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 mb-2">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+          </select>
+          <label class="block font-medium mb-1">Default Model</label>
+          <input type="text" :value="settings.selectedModel" @change="$emit('update', 'selectedModel', $event.target.value)"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+            placeholder="e.g. gpt-5.6-terra">
+          <p class="text-xs text-slate-400 mt-1">Model list querying from the provider API is coming in a future update.</p>
+        </div>
+
+        <!-- API Keys -->
+        <div class="flex flex-col gap-2">
+          <label class="block font-medium">API Keys</label>
+          <input type="password" :value="settings.openaiApiKey" @change="$emit('update', 'openaiApiKey', $event.target.value)"
+            placeholder="OpenAI API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          <input type="password" :value="settings.anthropicApiKey" @change="$emit('update', 'anthropicApiKey', $event.target.value)"
+            placeholder="Anthropic API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          <input type="password" :value="settings.geminiApiKey" @change="$emit('update', 'geminiApiKey', $event.target.value)"
+            placeholder="Gemini API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+        </div>
+
+        <!-- Global system prompt -->
+        <div>
+          <label class="block font-medium mb-1">Global System Prompt</label>
+          <textarea :value="settings.systemPrompt" @change="$emit('update', 'systemPrompt', $event.target.value)" rows="3"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+            placeholder="Applied to every chat unless overridden."></textarea>
+        </div>
+
+        <!-- PDF limits -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-medium mb-1">PDF Page Limit</label>
+            <input type="number" min="1" :value="settings.pdfPageLimit" @change="$emit('update', 'pdfPageLimit', +$event.target.value)"
+              class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          </div>
+          <div>
+            <label class="block font-medium mb-1">PDF Size Limit (MB)</label>
+            <input type="number" min="1" :value="settings.pdfSizeLimitMB" @change="$emit('update', 'pdfSizeLimitMB', +$event.target.value)"
+              class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          </div>
+        </div>
+      </div>
+
+      <div class="px-5 py-4 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+        <button @click="$emit('close')" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-1.5">Done</button>
+      </div>
+    </div>
+  </div>
+</script>
+
+<script type="text/x-template" id="message-bubble-template">
+  <div class="flex" :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
+    <div v-if="msg.role === 'user'"
+      class="max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm bg-indigo-600 text-white break-words whitespace-pre-wrap">
+      <div v-if="msg.attachments && msg.attachments.length" class="flex flex-wrap gap-1.5 mb-2">
+        <span v-for="(att, i) in msg.attachments" :key="i"
+          class="flex items-center gap-1 rounded-md bg-indigo-500/60 px-2 py-0.5 text-xs">
+          <icon :name="att.type === 'image' ? 'Image' : 'FileText'" :size="11"></icon>
+          {{ att.name }}
+        </span>
+      </div>
+      {{ msg.content }}
+    </div>
+    <div v-else class="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800 prose-message">
+      <div v-html="rendered"></div>
+    </div>
+  </div>
+</script>
+
+<script type="text/x-template" id="chat-list-item-template">
+  <div @click="$emit('select', chat.id)"
+    class="group flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer text-sm mb-0.5"
+    :class="active ? 'bg-indigo-600 text-white' : 'hover:bg-slate-200 dark:hover:bg-slate-800'">
+
+    <icon name="MessageSquare" :size="14" class="shrink-0 opacity-60"></icon>
+
+    <input v-if="editing" v-model.trim="draft" @click.stop @keyup.enter="commit" @keyup.escape="editing = false"
+      @blur="commit" ref="input"
+      class="flex-1 min-w-0 bg-transparent border-b focus:outline-none"
+      :class="active ? 'border-white' : 'border-indigo-500'">
+    <span v-else class="flex-1 min-w-0 truncate" @dblclick.stop="startEdit">{{ chat.title }}</span>
+
+    <div class="hidden group-hover:flex items-center gap-0.5 shrink-0" @click.stop>
+      <button @click="$emit('toggle-pin', chat)" class="p-1 rounded hover:bg-black/10" :title="chat.isPinned ? 'Unpin' : 'Pin'">
+        <icon name="Pin" :size="13" :class="chat.isPinned ? 'opacity-100' : 'opacity-50'"></icon>
+      </button>
+      <button @click="startEdit" class="p-1 rounded hover:bg-black/10" title="Rename">
+        <icon name="Pencil" :size="13" class="opacity-70"></icon>
+      </button>
+      <button @click="$emit('delete', chat)" class="p-1 rounded hover:bg-black/10" title="Delete">
+        <icon name="Trash2" :size="13" class="opacity-70"></icon>
+      </button>
+    </div>
+  </div>
+</script>
+
+<script>
+const { createApp, reactive, ref, computed, onMounted, nextTick, watch } = Vue;
+
+/* ---------------------------------------------------------------------- */
+/* Markdown renderer                                                        */
+/* ---------------------------------------------------------------------- */
+function renderMarkdown(content) {
+  if (!content) return '';
+  const dirty = marked.parse(content, { breaks: true, gfm: true });
+  return DOMPurify.sanitize(dirty, { ADD_ATTR: ['class'] });
+}
+
+/* ---------------------------------------------------------------------- */
+/* API Adapters — streaming SSE                                            */
+/* ---------------------------------------------------------------------- */
+async function* parseSSE(res, provider) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        const json = JSON.parse(data);
+        let chunk = '';
+        if (provider === 'anthropic') {
+          if (json.type === 'content_block_delta') chunk = json.delta?.text || '';
+        } else if (provider === 'gemini') {
+          chunk = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } else {
+          chunk = json.choices?.[0]?.delta?.content || '';
+        }
+        if (chunk) yield chunk;
+      } catch {}
+    }
+  }
+}
+
+async function* streamOpenAI(msgs, settings) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.openaiApiKey}` },
+    body: JSON.stringify({ model: settings.selectedModel, messages: msgs, stream: true })
+  });
+  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`);
+  yield* parseSSE(res, 'openai');
+}
+
+async function* streamAnthropic(msgs, settings, systemPrompt) {
+  const body = { model: settings.selectedModel, max_tokens: 8192, stream: true, messages: msgs };
+  if (systemPrompt) body.system = systemPrompt;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': settings.anthropicApiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+  yield* parseSSE(res, 'anthropic');
+}
+
+async function* streamGemini(msgs, settings, systemPrompt) {
+  const modelId = settings.selectedModel.startsWith('models/') ? settings.selectedModel : `models/${settings.selectedModel}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/${modelId}:streamGenerateContent?key=${settings.geminiApiKey}&alt=sse`;
+  const contents = msgs.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const body = { contents };
+  if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
+  yield* parseSSE(res, 'gemini');
+}
+
+/* ---------------------------------------------------------------------- */
+/* File processing                                                          */
+/* ---------------------------------------------------------------------- */
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function extractPdfText(file, pageLimit, sizeLimitMB) {
+  if (file.size > sizeLimitMB * 1024 * 1024) throw new Error(`PDF exceeds ${sizeLimitMB} MB limit`);
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages = Math.min(pdf.numPages, pageLimit);
+  let text = '';
+  for (let i = 1; i <= pages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(s => s.str).join(' ') + '\n';
+  }
+  if (pdf.numPages > pageLimit) text += `\n[Truncated: showing ${pageLimit} of ${pdf.numPages} pages]`;
+  return text;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Database                                                                */
+/* ---------------------------------------------------------------------- */
+const db = new Dexie('CalyxDB');
+db.version(1).stores({
+  chats: '++id, updatedAt, isPinned',
+  messages: '++id, chatId, createdAt',
+  settings: 'key'
+});
+
+const DEFAULT_SETTINGS = {
+  theme: 'dark',
+  systemPrompt: '',
+  selectedProvider: 'openai',
+  selectedModel: 'gpt-5.6-terra',
+  openaiApiKey: '',
+  anthropicApiKey: '',
+  geminiApiKey: '',
+  pdfPageLimit: 20,
+  pdfSizeLimitMB: 10
+};
+
+async function loadSettingsFromDb() {
+  const rows = await db.settings.toArray();
+  const stored = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  return { ...DEFAULT_SETTINGS, ...stored };
+}
+
+async function persistSetting(key, value) {
+  await db.settings.put({ key, value });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Icon component (Vue-safe Lucide integration)                           */
+/* ---------------------------------------------------------------------- */
+const IconComponent = {
+  props: { name: { type: String, required: true }, size: { type: Number, default: 18 } },
+  template: '<span class="inline-flex shrink-0" ref="el"></span>',
+  mounted() { this.render(); },
+  updated() { this.render(); },
+  methods: {
+    render() {
+      const def = lucide[this.name];
+      if (!def || !this.$refs.el) return;
+      const svg = lucide.createElement(def);
+      svg.setAttribute('width', this.size);
+      svg.setAttribute('height', this.size);
+      svg.setAttribute('stroke-width', 1.75);
+      this.$refs.el.replaceChildren(svg);
+    }
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* Settings modal component                                               */
+/* ---------------------------------------------------------------------- */
+const SettingsModal = {
+  props: { settings: { type: Object, required: true } },
+  emits: ['close', 'update'],
+  template: document.getElementById('settings-modal-template').innerHTML
+};
+
+/* ---------------------------------------------------------------------- */
+/* Chat list item component                                               */
+/* ---------------------------------------------------------------------- */
+const ChatListItem = {
+  props: { chat: { type: Object, required: true }, active: { type: Boolean, default: false } },
+  emits: ['select', 'rename', 'toggle-pin', 'delete'],
+  template: document.getElementById('chat-list-item-template').innerHTML,
+  setup(props, { emit }) {
+    const editing = ref(false);
+    const draft = ref(props.chat.title);
+    const input = ref(null);
+
+    async function startEdit() {
+      draft.value = props.chat.title;
+      editing.value = true;
+      await nextTick();
+      input.value?.focus();
+      input.value?.select();
+    }
+
+    function commit() {
+      if (!editing.value) return;
+      editing.value = false;
+      const title = draft.value || 'Untitled Chat';
+      if (title !== props.chat.title) emit('rename', props.chat, title);
+    }
+
+    return { editing, draft, input, startEdit, commit };
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* Message bubble component                                               */
+/* ---------------------------------------------------------------------- */
+const MessageBubble = {
+  props: { msg: { type: Object, required: true } },
+  template: document.getElementById('message-bubble-template').innerHTML,
+  setup(props) {
+    const rendered = computed(() => {
+      if (props.msg.role !== 'assistant') return '';
+      return renderMarkdown(props.msg.content);
+    });
+    return { rendered };
+  },
+  mounted() { this.highlightCode(); },
+  updated() { this.highlightCode(); },
+  methods: {
+    highlightCode() {
+      this.$el.querySelectorAll('pre code').forEach(block => {
+        if (!block.dataset.highlighted) hljs.highlightElement(block);
+      });
+      // Inject copy buttons
+      this.$el.querySelectorAll('pre').forEach(pre => {
+        if (pre.querySelector('.copy-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'copy-btn absolute top-2 right-2 text-xs px-2 py-0.5 rounded bg-slate-600 hover:bg-slate-500 text-slate-200 opacity-0 group-hover:opacity-100 transition-opacity';
+        btn.textContent = 'Copy';
+        btn.onclick = () => {
+          navigator.clipboard.writeText(pre.querySelector('code')?.innerText || '');
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = 'Copy', 1500);
+        };
+        pre.style.position = 'relative';
+        pre.classList.add('group');
+        pre.appendChild(btn);
+      });
+    }
+  }
+};
+
+/* ---------------------------------------------------------------------- */
+/* Root application                                                        */
+/* ---------------------------------------------------------------------- */
+const app = createApp({
+  setup() {
+    const settings = reactive({ ...DEFAULT_SETTINGS });
+    const showSettings = ref(false);
+    const searchQuery = ref('');
+    const toasts = ref([]);
+
+    const chats = ref([]);
+    const currentChatId = ref(null);
+    const messages = ref([]);
+
+    const streaming = ref(false);
+    const streamingContent = ref('');
+    const inputText = ref('');
+    const attachments = ref([]);
+
+    const editingTitle = ref(false);
+    const titleDraft = ref('');
+    const titleInput = ref(null);
+    const messageStream = ref(null);
+    const inputArea = ref(null);
+    const fileInput = ref(null);
+
+    const currentChat = computed(() => chats.value.find(c => c.id === currentChatId.value) || null);
+
+    const filteredChats = computed(() => {
+      const q = searchQuery.value.toLowerCase();
+      const list = q ? chats.value.filter(c => c.title.toLowerCase().includes(q)) : chats.value;
+      return [...list].sort((a, b) => b.updatedAt - a.updatedAt);
+    });
+    const pinnedChats = computed(() => filteredChats.value.filter(c => c.isPinned));
+    const unpinnedChats = computed(() => filteredChats.value.filter(c => !c.isPinned));
+
+    /* ---- Toasts ---- */
+    function showToast(message, type = 'info') {
+      const id = Date.now();
+      toasts.value.push({ id, message, type });
+      setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 3500);
+    }
+
+    /* ---- Theme ---- */
+    function applyTheme() {
+      document.documentElement.classList.toggle('dark', settings.theme === 'dark');
+    }
+
+    async function saveSetting(key, value) {
+      settings[key] = value;
+      await persistSetting(key, value);
+      if (key === 'theme') applyTheme();
+    }
+
+    function toggleTheme() {
+      saveSetting('theme', settings.theme === 'dark' ? 'light' : 'dark');
+    }
+
+    /* ---- Chats CRUD ---- */
+    async function refreshChats() {
+      chats.value = await db.chats.toArray();
+    }
+
+    async function loadMessages(chatId) {
+      messages.value = chatId
+        ? await db.messages.where('chatId').equals(chatId).sortBy('createdAt')
+        : [];
+      await nextTick();
+      scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      const el = messageStream.value;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+
+    async function createChat() {
+      const now = Date.now();
+      const id = await db.chats.add({
+        title: 'New Chat',
+        createdAt: now,
+        updatedAt: now,
+        isPinned: false,
+        systemPrompt: ''
+      });
+      await refreshChats();
+      await selectChat(id);
+    }
+
+    async function selectChat(id) {
+      if (streaming.value) return;
+      currentChatId.value = id;
+      editingTitle.value = false;
+      attachments.value = [];
+      await loadMessages(id);
+    }
+
+    async function renameChat(chat, title) {
+      await db.chats.update(chat.id, { title, updatedAt: Date.now() });
+      await refreshChats();
+    }
+
+    async function togglePin(chat) {
+      await db.chats.update(chat.id, { isPinned: !chat.isPinned });
+      await refreshChats();
+    }
+
+    async function deleteChat(chat) {
+      if (!confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
+      await db.transaction('rw', db.chats, db.messages, async () => {
+        await db.messages.where('chatId').equals(chat.id).delete();
+        await db.chats.delete(chat.id);
+      });
+      if (currentChatId.value === chat.id) {
+        currentChatId.value = null;
+        messages.value = [];
+      }
+      await refreshChats();
+    }
+
+    function startEditTitle() {
+      if (!currentChat.value) return;
+      titleDraft.value = currentChat.value.title;
+      editingTitle.value = true;
+      nextTick(() => titleInput.value?.focus());
+    }
+
+    async function commitTitle() {
+      if (!editingTitle.value || !currentChat.value) return;
+      editingTitle.value = false;
+      const title = titleDraft.value || 'Untitled Chat';
+      if (title !== currentChat.value.title) await renameChat(currentChat.value, title);
+    }
+
+    /* ---- File handling ---- */
+    function triggerFileInput() {
+      fileInput.value?.click();
+    }
+
+    async function handleFiles(event) {
+      const files = Array.from(event.target.files);
+      event.target.value = '';
+      for (const file of files) {
+        try {
+          if (file.type.startsWith('image/')) {
+            const data = await readFileAsBase64(file);
+            attachments.value.push({ type: 'image', name: file.name, mimeType: file.type, data });
+          } else if (file.type === 'application/pdf') {
+            const text = await extractPdfText(file, settings.pdfPageLimit, settings.pdfSizeLimitMB);
+            attachments.value.push({ type: 'pdf', name: file.name, text });
+          } else if (file.type === 'text/plain') {
+            const text = await file.text();
+            attachments.value.push({ type: 'text', name: file.name, text });
+          } else {
+            showToast(`Unsupported file type: ${file.name}`, 'error');
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      }
+    }
+
+    function removeAttachment(i) {
+      attachments.value.splice(i, 1);
+    }
+
+    function autoResizeInput() {
+      const el = inputArea.value;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 240) + 'px';
+    }
+
+    /* ---- Sending & streaming ---- */
+    async function sendMessage() {
+      if (!currentChat.value || streaming.value) return;
+      const text = inputText.value.trim();
+      if (!text && !attachments.value.length) return;
+
+      // Build user message content — prepend doc text if present
+      let userContent = text;
+      const docParts = attachments.value
+        .filter(a => a.type === 'pdf' || a.type === 'text')
+        .map(a => `[File: ${a.name}]\n${a.text}`);
+      if (docParts.length) userContent = docParts.join('\n\n') + (text ? '\n\n' + text : '');
+
+      const now = Date.now();
+      const userMsg = {
+        chatId: currentChatId.value,
+        role: 'user',
+        content: userContent,
+        createdAt: now,
+        attachments: attachments.value.map(a => ({ type: a.type, name: a.name }))
+      };
+      const userMsgId = await db.messages.add(userMsg);
+      userMsg.id = userMsgId;
+      messages.value.push(userMsg);
+
+      inputText.value = '';
+      attachments.value = [];
+      if (inputArea.value) { inputArea.value.style.height = 'auto'; }
+      await nextTick(); scrollToBottom();
+
+      // Auto-name chat after first user message
+      if (messages.value.length === 1 && currentChat.value.title === 'New Chat') {
+        const autoTitle = userContent.slice(0, 40) + (userContent.length > 40 ? '…' : '');
+        await renameChat(currentChat.value, autoTitle);
+      }
+
+      // Build API payload
+      const history = messages.value.map(m => ({ role: m.role, content: m.content }));
+      const systemPrompt = currentChat.value.systemPrompt || settings.systemPrompt;
+
+      streaming.value = true;
+      streamingContent.value = '';
+
+      try {
+        let gen;
+        if (settings.selectedProvider === 'anthropic') {
+          if (!settings.anthropicApiKey) throw new Error('Anthropic API key not set');
+          gen = streamAnthropic(history, settings, systemPrompt);
+        } else if (settings.selectedProvider === 'gemini') {
+          if (!settings.geminiApiKey) throw new Error('Gemini API key not set');
+          gen = streamGemini(history, settings, systemPrompt);
+        } else {
+          if (!settings.openaiApiKey) throw new Error('OpenAI API key not set');
+          const oaiMsgs = systemPrompt ? [{ role: 'system', content: systemPrompt }, ...history] : history;
+          gen = streamOpenAI(oaiMsgs, settings);
+        }
+
+        for await (const chunk of gen) {
+          streamingContent.value += chunk;
+          await nextTick(); scrollToBottom();
+        }
+
+        // Persist assistant message
+        const asstMsg = {
+          chatId: currentChatId.value,
+          role: 'assistant',
+          content: streamingContent.value,
+          createdAt: Date.now(),
+          attachments: []
+        };
+        const asstId = await db.messages.add(asstMsg);
+        asstMsg.id = asstId;
+        messages.value.push(asstMsg);
+        await db.chats.update(currentChatId.value, { updatedAt: Date.now() });
+        await refreshChats();
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        streaming.value = false;
+        streamingContent.value = '';
+        await nextTick(); scrollToBottom();
+      }
+    }
+
+    /* ---- Export ---- */
+    async function exportData() {
+      const [exportChats, exportMessages] = await Promise.all([
+        db.chats.toArray(),
+        db.messages.toArray()
+      ]);
+      const { openaiApiKey, anthropicApiKey, geminiApiKey, ...safeSettings } = settings;
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        version: 1,
+        settings: safeSettings,
+        chats: exportChats,
+        messages: exportMessages
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `calyx-export-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Data exported successfully');
+    }
+
+    onMounted(async () => {
+      const loaded = await loadSettingsFromDb();
+      Object.assign(settings, loaded);
+      applyTheme();
+      // Configure PDF.js worker
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.worker.min.js';
+      }
+      await refreshChats();
+    });
+
+    return {
+      settings, showSettings, searchQuery, toasts,
+      chats, currentChatId, currentChat, messages,
+      pinnedChats, unpinnedChats,
+      streaming, streamingContent, inputText, attachments,
+      editingTitle, titleDraft, titleInput, messageStream, inputArea, fileInput,
+      saveSetting, toggleTheme,
+      createChat, selectChat, renameChat, togglePin, deleteChat,
+      startEditTitle, commitTitle, exportData,
+      sendMessage, triggerFileInput, handleFiles, removeAttachment, autoResizeInput,
+      renderMarkdown
+    };
+  }
+});
+
+app.component('icon', IconComponent);
+app.component('settings-modal', SettingsModal);
+app.component('chat-list-item', ChatListItem);
+app.component('message-bubble', MessageBubble);
+app.mount('#app');
+</script>
+</body>
+</html>
