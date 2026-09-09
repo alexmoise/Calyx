@@ -151,6 +151,10 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * **Agent-Driven Conversations:** Start new chats by selecting a specific agent.
   * **Mid-Conversation Agent Switching:** Change the active agent at any point during a chat session. The new agent inherits the entire conversation history and context seamlessly, replacing the simpler "Mid-Conversation Provider Switching" concept.
 
+* **Browser-Native Agentic Tools:**
+  * **Long-Term Memory:** Cross-chat persistence of user facts, preferences, and context stored in IndexedDB. Automatically retrieved and injected into system prompts to maintain continuity across sessions.
+  * **Native Task Management (ToDo):** Built-in tool calling allowing the LLM to read, write, and manage a persistent ToDo list stored in IndexedDB, rendered natively in the UI.
+
 * **Dual-Model Compare Mode:**
   * Side-by-side prompt dispatch: send the identical prompt simultaneously to two providers to evaluate reasoning, latency, and tone side by side.
 
