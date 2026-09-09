@@ -22,7 +22,20 @@ Calyx eliminates this trade-off by occupying the empty space between them: **an 
 
 ---
 
-## 2. Iterative Roadmap
+## 2. Quick Start
+
+1. **Download** — Save [`index.html`](index.html) to your machine (clone the repo or download the raw file).
+2. **Open** — Double-click `index.html`, or open it in any modern browser (Chrome, Edge, Firefox, Safari).
+3. **Add API key(s)** — Click **Settings**, paste your API key for OpenAI, Anthropic, and/or Gemini.
+4. **Set default model** — In the same Settings panel, enter the model name to use by default.
+5. **(Optional) Set a system prompt** — Add a global system prompt to steer the assistant's behavior across chats.
+6. **Start chatting** — Close Settings, type a message, and press `Enter`.
+
+Your keys, prompts, and chat history stay in the browser's local IndexedDB — nothing is sent anywhere except directly to the provider you configured.
+
+---
+
+## 3. Iterative Roadmap
 
 The roadmap is organized into progressive milestones. Phase 1 is complete and delivers a robust daily driver; subsequent phases introduce power-user UX, deep conversational control, and agentic protocols.
 
