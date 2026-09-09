@@ -1,0 +1,159 @@
+# Calyx
+
+A zero-backend, state-of-the-art AI workspace packaged entirely within a single, portable `index.html` file. Calyx delivers the visual fidelity, performance, and feature depth of enterprise chat applications while running strictly client-side in modern web browsers across Windows, macOS, and Linux.
+
+---
+
+## 1. What Calyx Is & The Gap It Fills
+
+Current AI chat software forces a compromise between two extremes:
+
+* **Fragile single-file scripts:** Lightweight and portable, but bare-bones. They rely on transient memory or `localStorage`, lack streaming control, break when handling attachments, and offer minimal interface polish.
+* **Heavy multi-tier web platforms:** Polished and capable, but laden with npm dependencies, containerized backends, external database setups, telemetry, and hosting overhead. They introduce middleman servers between your machine and provider APIs.
+
+Calyx eliminates this trade-off by occupying the empty space between them: **an uncompromised, zero-build desktop-grade interface delivered as a single self-contained artifact.**
+
+### Key Architectural Pillars
+
+* **Absolute Portability:** A single file. Double-click to open in any browser (`file://`), run from a local path, or host via static storage. No Node runtime, no compilation step, and no web server required.
+* **Complete Data Sovereignty:** Direct client-to-API communication using Bring-Your-Own-Key (BYOK). Prompts, attachments, and keys never touch a proxy or third-party server.
+* **Scalable Client-Side Persistence:** Replaces fragile storage limits with IndexedDB, enabling large-scale conversation history and relational chat metadata directly in the browser sandbox.
+* **Universal Platform Parity:** Works identically across Windows, macOS, and Linux with zero OS-specific dependencies.
+
+---
+
+## 2. Iterative Roadmap
+
+The roadmap is organized into progressive milestones. Phase 1 is complete and delivers a robust daily driver; subsequent phases introduce power-user UX, deep conversational control, and agentic protocols.
+
+```
+Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branching) ──> Phase 4 (Agentic/MCP)
+
+```
+
+---
+
+### Phase 1: Foundation & The Polished MVP — ✅ Complete
+
+*Goal: A bulletproof, elegant daily driver with native streaming, key management, and robust state storage.*
+
+* **Single-File Architecture Setup:**
+  * Declarative reactive UI powered by Vue 3 (global CDN build).
+  * Responsive design system built with Tailwind CSS (CDN runtime).
+  * Crisp vector iconography via Lucide icons.
+
+* **Local Storage Engine:**
+  * IndexedDB persistence powered by Dexie.js for asynchronous, non-blocking storage.
+  * Schemas for `chats`, `messages`, and `settings`.
+
+* **Unified API Adapter Layer:**
+  * **OpenAI:** Streaming chat completions via native `fetch`.
+  * **Anthropic:** Native browser calls utilizing the `anthropic-dangerous-direct-browser-access: "true"` header.
+  * **Google Gemini:** Direct streaming endpoints via native `fetch` with token-by-token parsing.
+  * Default provider/model selectable in Settings; API key stored per provider.
+
+* **Streaming:**
+  * Real-time Server-Sent Events (SSE) stream consumption with live-rendered assistant bubble and animated "thinking" indicator.
+
+* **Core Conversation UX:**
+  * Create, select, and delete chat sessions (with confirmation on delete).
+  * Inline chat renaming (double-click title or list item) with auto-generated title proposal based on the initial user turn.
+  * Chat pinning to keep priority threads fixed at the top of the sidebar.
+  * Sidebar search filtering chats by title.
+  * Auto-resizing prompt input field (`Enter` to send).
+
+* **File Attachments:**
+  * Image ingestion (file picker) with base64 encoding; attachment shown as a removable name chip before send.
+  * PDF text extraction via `pdf.js`, bounded by configurable page and file-size limits.
+  * Plain-text (`.txt`) ingestion via `FileReader`.
+
+* **Render Pipeline & Content Security:**
+  * Markdown parsing with `marked.js`.
+  * DOM sanitization using `DOMPurify` to eliminate XSS risks from untrusted model outputs.
+  * Code block syntax highlighting with `highlight.js`, accompanied by a one-click "Copy" button.
+
+* **Settings & Security Window:**
+  * Modal drawer to store API keys directly to IndexedDB (OpenAI, Anthropic, Gemini).
+  * Default provider and model (free-text) configuration.
+  * Global system prompt configuration.
+  * Configurable PDF page-count and file-size limits.
+  * Light/dark theme toggle (persisted).
+
+* **Data Portability:**
+  * Full database export (chats, messages, settings) to a JSON file, excluding stored API keys.
+
+* **Feedback:**
+  * Toast notifications for errors and confirmations.
+
+---
+
+### Phase 2: Power User UX & Document Intelligence
+
+*Goal: Turn Calyx into a high-utility knowledge tool with rich output rendering and richer client-side ingestion.*
+
+* **Chat Organization & Discovery:**
+  * **Full-Text Search:** Extend search to match message bodies, not just chat titles.
+
+* **Client-Side Document & Vision Ingestion:**
+  * **Drag-and-Drop & Clipboard Paste:** Ingest images by dragging onto the window or pasting from clipboard, in addition to the file picker.
+  * **Visual Thumbnails:** Render actual image previews in the attachment tray instead of icon-only chips.
+  * **Markdown Files:** Extend document parsing to accept `.md` alongside PDF/TXT.
+
+* **Render Pipeline Enhancements:**
+  * LaTeX mathematical formula rendering via KaTeX.
+
+* **Formatted Chat Export & Archival:**
+  * **Markdown Export:** Clean, human-readable `.md` output containing timestamps, system prompts, and message bodies.
+  * **Self-Contained HTML Export:** Styled, standalone read-only transcripts ready for sharing.
+  * **Backup Restore:** Import a previously exported JSON backup to restore chats/messages/settings.
+
+* **Generation Control:**
+  * **Stop Generation:** Instant cancellation of an in-flight response using `AbortController`.
+
+* **Model Selection:**
+  * Curated per-provider model dropdown (replacing the current free-text model field).
+
+* **Per-Chat Configuration:**
+  * UI to override the global system prompt on a per-chat basis (data schema already supports this field).
+
+---
+
+### Phase 3: Advanced Conversation Branching & Experimentation
+
+*Goal: Provide nonlinear thinking tools that surpass traditional chat interfaces.*
+
+* **Nonlinear Conversation Control:**
+  * **Chat Forking:** Branch a new conversation thread from any historical message turn, preserving context up to that point.
+  * **Message Editing & Regeneration:** Edit any previous user prompt and re-run inference from that juncture without deleting previous attempts.
+  * **Alternative Message Swapping:** Carousel through regenerated assistant responses (Turn 1 of N).
+
+* **Granular Context Controls:**
+  * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
+
+* **Dual-Model Compare Mode:**
+  * Side-by-side prompt dispatch: send the identical prompt simultaneously to two providers to evaluate reasoning, latency, and tone side by side.
+
+* **Token & Cost Telemetry:**
+  * Accurate client-side token counting.
+  * Real-time session cost estimations based on provider pricing tables.
+
+---
+
+### Phase 4: Frontier Integrations & Agentic Protocols
+
+*Goal: Elevate Calyx into an extensible local agentic workstation.*
+
+* **Model Context Protocol (MCP) Integration:**
+  * Native client support for Anthropic's Model Context Protocol.
+  * Connect the browser UI to local or remote MCP servers via WebSocket bridges (`ws://localhost:...`) or SSE endpoints.
+  * Automatic tool discovery, schema parsing, and model-driven tool execution loops directly inside the chat interface.
+
+* **Client-Side Media Compression:**
+  * Browser-side Canvas/Wasm image optimization to scale and compress oversized images before API dispatch, cutting token costs and latency.
+
+* **Offline/Hybrid Local LLM Support:**
+  * WebGPU-accelerated local inference fallback (via WebLLM/Wasm) for zero-connectivity prompt handling.
+  * Seamless switching between local on-device models and frontier cloud APIs.
+
+* **Hardened Data Encryption:**
+  * Optional master-password database encryption using Web Crypto API (AES-GCM) to encrypt stored API keys and chat archives at rest.
