@@ -131,9 +131,9 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 ---
 
-### Phase 3: Advanced Conversation Branching & Experimentation
+### Phase 3: Advanced Conversation Control & Specialized Agents
 
-*Goal: Provide nonlinear thinking tools that surpass traditional chat interfaces.*
+*Goal: Provide nonlinear thinking tools, precise cost tracking, and persona-driven agent workflows.*
 
 * **Nonlinear Conversation Control:**
   * **Chat Forking:** Branch a new conversation thread from any historical message turn, preserving context up to that point.
@@ -144,15 +144,20 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
   * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
   * **Context Compaction:** Summarize or prune older conversation turns to keep long-running chats within model context limits.
-  * **Mid-Conversation Provider Switching:** Change the active provider and model at any point during a chat session (e.g., start with a fast local model, switch to a frontier cloud model for a complex reasoning step) while maintaining full conversation history.
+
+* **Specialized Agents System:**
+  * **Agent Definition:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, specific inference parameters (temperature, effort, etc.), and an agent-specific system prompt.
+  * **Skill Files:** Enhance agents by uploading local files or linking remote URLs containing specialized instructions or structured tools. These skills are "advertised" to the agent, allowing it to read them dynamically when necessary.
+  * **Agent-Driven Conversations:** Start new chats by selecting a specific agent.
+  * **Mid-Conversation Agent Switching:** Change the active agent at any point during a chat session. The new agent inherits the entire conversation history and context seamlessly, replacing the simpler "Mid-Conversation Provider Switching" concept.
 
 * **Dual-Model Compare Mode:**
   * Side-by-side prompt dispatch: send the identical prompt simultaneously to two providers to evaluate reasoning, latency, and tone side by side.
 
 * **Token & Cost Telemetry:**
-  * Accurate client-side token counting.
-  * **Live Conversation Cost:** Real-time cost estimation displayed per conversation, incrementing as messages are exchanged, based on provider pricing tables.
-  * **Cost Reporting:** A reporting view showing cumulative spend for a selectable period (default: current month), presented as a total and broken down per provider.
+  * **Live Conversation Cost:** Calculate and display live cost per chat, updated at the end of each message stream based on exact API usage statistics.
+  * **Dynamic Pricing Engine:** Read real prices directly from the API response if available. If not, fallback to manual price inputs (global per model) configured in Settings.
+  * **Adaptive Display:** If prices are available, display the cost in dollars ($). If prices are missing, display raw token counts. If manual prices are added later, historical token counts automatically convert to dollar displays.
 
 ---
 
