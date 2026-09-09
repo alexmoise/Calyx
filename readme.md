@@ -142,13 +142,16 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 * **Granular Context Controls:**
   * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
+  * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
+  * **Context Compaction:** Summarize or prune older conversation turns to keep long-running chats within model context limits.
 
 * **Dual-Model Compare Mode:**
   * Side-by-side prompt dispatch: send the identical prompt simultaneously to two providers to evaluate reasoning, latency, and tone side by side.
 
 * **Token & Cost Telemetry:**
   * Accurate client-side token counting.
-  * Real-time session cost estimations based on provider pricing tables.
+  * **Live Conversation Cost:** Real-time cost estimation displayed per conversation, incrementing as messages are exchanged, based on provider pricing tables.
+  * **Cost Reporting:** A reporting view showing cumulative spend for a selectable period (default: current month), presented as a total and broken down per provider.
 
 ---
 
