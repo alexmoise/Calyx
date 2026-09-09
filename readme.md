@@ -171,5 +171,10 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * WebGPU-accelerated local inference fallback (via WebLLM/Wasm) for zero-connectivity prompt handling.
   * Seamless switching between local on-device models and frontier cloud APIs.
 
+* **Local Server Endpoints (LM Studio / Ollama):**
+  * New provider adapter targeting OpenAI-compatible chat completions APIs exposed by local inference servers (LM Studio, Ollama, and similar).
+  * Settings: configurable base URL (default `http://localhost:1234/v1`), optional API key, and free-text model name.
+  * Supports `localhost`, LAN IPs/hostnames, and publicly resolvable hostnames — enabling on-machine, LAN-hosted, or remotely reachable local-model servers.
+
 * **Hardened Data Encryption:**
   * Optional master-password database encryption using Web Crypto API (AES-GCM) to encrypt stored API keys and chat archives at rest.
