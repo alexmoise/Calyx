@@ -144,6 +144,7 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
   * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
   * **Context Compaction:** Summarize or prune older conversation turns to keep long-running chats within model context limits.
+  * **Mid-Conversation Provider Switching:** Change the active provider and model at any point during a chat session (e.g., start with a fast local model, switch to a frontier cloud model for a complex reasoning step) while maintaining full conversation history.
 
 * **Dual-Model Compare Mode:**
   * Side-by-side prompt dispatch: send the identical prompt simultaneously to two providers to evaluate reasoning, latency, and tone side by side.
@@ -178,3 +179,8 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 * **Hardened Data Encryption:**
   * Optional master-password database encryption using Web Crypto API (AES-GCM) to encrypt stored API keys and chat archives at rest.
+
+* **Remote Storage Sync (Cloud/Self-Hosted):**
+  * Multi-device synchronization using Origin Private File System (OPFS) combined with WebDAV or S3-compatible APIs (Google Drive, OneDrive, AWS, self-hosted).
+  * Syncs individual chat files rather than a monolithic database to gracefully handle offline usage and merge conflicts.
+  * Zero-trust architecture: all synced data is encrypted client-side (AES-GCM) before leaving the browser.
