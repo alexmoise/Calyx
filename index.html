@@ -163,6 +163,22 @@
       </button>
     </header>
 
+    <!-- Chat files bar -->
+    <div v-if="currentChat && chatFiles.length" class="shrink-0 px-4 py-2 border-b border-slate-200 dark:border-slate-800">
+      <div class="flex flex-wrap items-center gap-2">
+        <div v-for="f in chatFiles" :key="f.id"
+          class="flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-xs">
+          <icon name="FileText" :size="13" class="text-indigo-500"></icon>
+          <span class="max-w-[160px] truncate" :title="f.name">{{ f.name }}</span>
+          <span class="text-slate-400">~{{ f.tokens.toLocaleString() }}tok</span>
+          <button @click="removeChatFile(f.id)" class="text-slate-400 hover:text-red-500">
+            <icon name="X" :size="12"></icon>
+          </button>
+        </div>
+        <span class="text-xs text-slate-400 ml-1">Total: ~{{ chatFilesTokens.toLocaleString() }} tokens</span>
+      </div>
+    </div>
+
     <!-- Message stream -->
     <div class="flex-1 overflow-y-auto px-4 py-6" ref="messageStream">
       <div class="max-w-3xl mx-auto flex flex-col gap-4">
@@ -219,13 +235,13 @@
             @keydown.enter.exact.prevent="sendMessage"
             @input="autoResizeInput"
             class="autosize flex-1 bg-transparent focus:outline-none text-sm leading-6 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
-          <button @click="sendMessage" :disabled="!currentChat || streaming || (!inputText.trim() && !attachments.length)"
+          <button @click="sendMessage" :disabled="!currentChat || streaming || (!inputText.trim() && !attachments.length && !pendingDocIds.length)"
             class="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
             <icon name="Send" :size="17"></icon>
           </button>
         </div>
       </div>
-      <input ref="fileInput" type="file" multiple accept="image/*,.pdf,.txt" class="hidden" @change="handleFiles">
+      <input ref="fileInput" type="file" multiple accept="image/*,.pdf,.txt,.md" class="hidden" @change="handleFiles">
     </div>
   </main>
 
@@ -316,6 +332,14 @@
             <input type="number" min="1" :value="settings.pdfSizeLimitMB" @change="$emit('update', 'pdfSizeLimitMB', +$event.target.value)"
               class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
           </div>
+        </div>
+
+        <!-- Document token warning -->
+        <div>
+          <label class="block font-medium mb-1">Document Token Warning</label>
+          <input type="number" min="1000" :value="settings.docTokenWarn" @change="$emit('update', 'docTokenWarn', +$event.target.value)"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          <p class="text-xs text-slate-400 mt-1">Warn when a chat's attached document text exceeds this estimated token count.</p>
         </div>
       </div>
 
@@ -427,9 +451,12 @@ async function* streamOpenAI(msgs, settings) {
   yield* parseSSE(res, 'openai');
 }
 
-async function* streamAnthropic(msgs, settings, systemPrompt) {
+async function* streamAnthropic(msgs, settings, systemPrompt, docsBlock) {
   const body = { model: settings.selectedModel, max_tokens: 8192, stream: true, messages: msgs };
-  if (systemPrompt) body.system = systemPrompt;
+  const systemBlocks = [];
+  if (systemPrompt) systemBlocks.push({ type: 'text', text: systemPrompt });
+  if (docsBlock) systemBlocks.push({ type: 'text', text: docsBlock, cache_control: { type: 'ephemeral' } });
+  if (systemBlocks.length) body.system = systemBlocks;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -444,12 +471,15 @@ async function* streamAnthropic(msgs, settings, systemPrompt) {
   yield* parseSSE(res, 'anthropic');
 }
 
-async function* streamGemini(msgs, settings, systemPrompt) {
+async function* streamGemini(msgs, settings, systemPrompt, docsBlock) {
   const modelId = settings.selectedModel.startsWith('models/') ? settings.selectedModel : `models/${settings.selectedModel}`;
   const url = `https://generativelanguage.googleapis.com/v1beta/${modelId}:streamGenerateContent?key=${settings.geminiApiKey}&alt=sse`;
   const contents = msgs.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
   const body = { contents };
-  if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
+  const sysParts = [];
+  if (systemPrompt) sysParts.push({ text: systemPrompt });
+  if (docsBlock) sysParts.push({ text: docsBlock });
+  if (sysParts.length) body.systemInstruction = { parts: sysParts };
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -486,6 +516,26 @@ async function extractPdfText(file, pageLimit, sizeLimitMB) {
   return text;
 }
 
+function normalizeText(t) {
+  return t.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function estimateTokens(t) {
+  return Math.ceil(t.length / 4);
+}
+
+async function sha256(t) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function buildDocsBlock(files) {
+  if (!files.length) return '';
+  const esc = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const docs = files.map((f, i) => `<document index="${i + 1}" name="${esc(f.name)}">\n${f.text}\n</document>`).join('\n');
+  return `<documents>\n${docs}\n</documents>`;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Database                                                                */
 /* ---------------------------------------------------------------------- */
@@ -494,6 +544,12 @@ db.version(1).stores({
   chats: '++id, updatedAt, isPinned',
   messages: '++id, chatId, createdAt',
   settings: 'key'
+});
+db.version(2).stores({
+  chats: '++id, updatedAt, isPinned',
+  messages: '++id, chatId, createdAt',
+  settings: 'key',
+  files: '++id, chatId, hash'
 });
 
 const DEFAULT_SETTINGS = {
@@ -505,7 +561,8 @@ const DEFAULT_SETTINGS = {
   anthropicApiKey: '',
   geminiApiKey: '',
   pdfPageLimit: 20,
-  pdfSizeLimitMB: 10
+  pdfSizeLimitMB: 10,
+  docTokenWarn: 100000
 };
 
 async function loadSettingsFromDb() {
@@ -636,6 +693,8 @@ const app = createApp({
     const streamingContent = ref('');
     const inputText = ref('');
     const attachments = ref([]);
+    const chatFiles = ref([]);
+    const pendingDocIds = ref([]);
 
     const editingTitle = ref(false);
     const titleDraft = ref('');
@@ -653,6 +712,7 @@ const app = createApp({
     });
     const pinnedChats = computed(() => filteredChats.value.filter(c => c.isPinned));
     const unpinnedChats = computed(() => filteredChats.value.filter(c => !c.isPinned));
+    const chatFilesTokens = computed(() => chatFiles.value.reduce((s, f) => s + f.tokens, 0));
 
     /* ---- Toasts ---- */
     function showToast(message, type = 'info') {
@@ -712,6 +772,8 @@ const app = createApp({
       currentChatId.value = id;
       editingTitle.value = false;
       attachments.value = [];
+      pendingDocIds.value = [];
+      chatFiles.value = id ? await db.files.where('chatId').equals(id).sortBy('createdAt') : [];
       await loadMessages(id);
     }
 
@@ -727,13 +789,16 @@ const app = createApp({
 
     async function deleteChat(chat) {
       if (!confirm(`Delete "${chat.title}"? This cannot be undone.`)) return;
-      await db.transaction('rw', db.chats, db.messages, async () => {
+      await db.transaction('rw', db.chats, db.messages, db.files, async () => {
         await db.messages.where('chatId').equals(chat.id).delete();
+        await db.files.where('chatId').equals(chat.id).delete();
         await db.chats.delete(chat.id);
       });
       if (currentChatId.value === chat.id) {
         currentChatId.value = null;
         messages.value = [];
+        chatFiles.value = [];
+        pendingDocIds.value = [];
       }
       await refreshChats();
     }
@@ -757,20 +822,38 @@ const app = createApp({
       fileInput.value?.click();
     }
 
+    async function addChatFile(name, type, rawText) {
+      const text = normalizeText(rawText);
+      const hash = await sha256(text);
+      if (chatFiles.value.some(f => f.hash === hash)) {
+        showToast(`Duplicate content skipped: ${name}`, 'error');
+        return;
+      }
+      const tokens = estimateTokens(text);
+      const record = { chatId: currentChatId.value, name, type, hash, text, tokens, createdAt: Date.now() };
+      record.id = await db.files.add(record);
+      chatFiles.value.push(record);
+      pendingDocIds.value.push(record.id);
+      if (chatFilesTokens.value > settings.docTokenWarn) {
+        showToast(`Document context is large (~${chatFilesTokens.value.toLocaleString()} tokens)`, 'error');
+      }
+    }
+
     async function handleFiles(event) {
       const files = Array.from(event.target.files);
       event.target.value = '';
       for (const file of files) {
         try {
+          const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
           if (file.type.startsWith('image/')) {
             const data = await readFileAsBase64(file);
             attachments.value.push({ type: 'image', name: file.name, mimeType: file.type, data });
-          } else if (file.type === 'application/pdf') {
+          } else if (file.type === 'application/pdf' || ext === '.pdf') {
             const text = await extractPdfText(file, settings.pdfPageLimit, settings.pdfSizeLimitMB);
-            attachments.value.push({ type: 'pdf', name: file.name, text });
-          } else if (file.type === 'text/plain') {
+            await addChatFile(file.name, 'pdf', text);
+          } else if (file.type === 'text/plain' || file.type === 'text/markdown' || ext === '.txt' || ext === '.md') {
             const text = await file.text();
-            attachments.value.push({ type: 'text', name: file.name, text });
+            await addChatFile(file.name, 'text', text);
           } else {
             showToast(`Unsupported file type: ${file.name}`, 'error');
           }
@@ -784,6 +867,12 @@ const app = createApp({
       attachments.value.splice(i, 1);
     }
 
+    async function removeChatFile(id) {
+      await db.files.delete(id);
+      chatFiles.value = chatFiles.value.filter(f => f.id !== id);
+      pendingDocIds.value = pendingDocIds.value.filter(i => i !== id);
+    }
+
     function autoResizeInput() {
       const el = inputArea.value;
       if (!el) return;
@@ -795,27 +884,33 @@ const app = createApp({
     async function sendMessage() {
       if (!currentChat.value || streaming.value) return;
       const text = inputText.value.trim();
-      if (!text && !attachments.value.length) return;
+      if (!text && !attachments.value.length && !pendingDocIds.value.length) return;
 
-      // Build user message content — prepend doc text if present
-      let userContent = text;
-      const docParts = attachments.value
-        .filter(a => a.type === 'pdf' || a.type === 'text')
-        .map(a => `[File: ${a.name}]\n${a.text}`);
-      if (docParts.length) userContent = docParts.join('\n\n') + (text ? '\n\n' + text : '');
+      const newDocNames = pendingDocIds.value
+        .map(id => chatFiles.value.find(f => f.id === id)?.name)
+        .filter(Boolean);
+      const content = text || (newDocNames.length ? `Attached: ${newDocNames.join(', ')}` : '');
 
       const now = Date.now();
       const userMsg = {
         chatId: currentChatId.value,
         role: 'user',
-        content: userContent,
+        content,
         createdAt: now,
-        attachments: attachments.value.map(a => ({ type: a.type, name: a.name }))
+        attachments: [
+          ...pendingDocIds.value.map(id => {
+            const f = chatFiles.value.find(x => x.id === id);
+            return f ? { type: f.type, name: f.name } : null;
+          }).filter(Boolean),
+          ...attachments.value.map(a => ({ type: a.type, name: a.name }))
+        ]
       };
       const userMsgId = await db.messages.add(userMsg);
       userMsg.id = userMsgId;
       messages.value.push(userMsg);
 
+      const autoTitleSource = content;
+      pendingDocIds.value = [];
       inputText.value = '';
       attachments.value = [];
       if (inputArea.value) { inputArea.value.style.height = 'auto'; }
@@ -823,13 +918,14 @@ const app = createApp({
 
       // Auto-name chat after first user message
       if (messages.value.length === 1 && currentChat.value.title === 'New Chat') {
-        const autoTitle = userContent.slice(0, 40) + (userContent.length > 40 ? '…' : '');
+        const autoTitle = autoTitleSource.slice(0, 40) + (autoTitleSource.length > 40 ? '…' : '');
         await renameChat(currentChat.value, autoTitle);
       }
 
       // Build API payload
       const history = messages.value.map(m => ({ role: m.role, content: m.content }));
       const systemPrompt = currentChat.value.systemPrompt || settings.systemPrompt;
+      const docsBlock = buildDocsBlock(chatFiles.value);
 
       streaming.value = true;
       streamingContent.value = '';
@@ -838,13 +934,15 @@ const app = createApp({
         let gen;
         if (settings.selectedProvider === 'anthropic') {
           if (!settings.anthropicApiKey) throw new Error('Anthropic API key not set');
-          gen = streamAnthropic(history, settings, systemPrompt);
+          gen = streamAnthropic(history, settings, systemPrompt, docsBlock);
         } else if (settings.selectedProvider === 'gemini') {
           if (!settings.geminiApiKey) throw new Error('Gemini API key not set');
-          gen = streamGemini(history, settings, systemPrompt);
+          gen = streamGemini(history, settings, systemPrompt, docsBlock);
         } else {
           if (!settings.openaiApiKey) throw new Error('OpenAI API key not set');
-          const oaiMsgs = systemPrompt ? [{ role: 'system', content: systemPrompt }, ...history] : history;
+          let systemContent = systemPrompt;
+          if (docsBlock) systemContent = systemContent ? `${systemContent}\n\n${docsBlock}` : docsBlock;
+          const oaiMsgs = systemContent ? [{ role: 'system', content: systemContent }, ...history] : history;
           gen = streamOpenAI(oaiMsgs, settings);
         }
 
@@ -877,17 +975,19 @@ const app = createApp({
 
     /* ---- Export ---- */
     async function exportData() {
-      const [exportChats, exportMessages] = await Promise.all([
+      const [exportChats, exportMessages, exportFiles] = await Promise.all([
         db.chats.toArray(),
-        db.messages.toArray()
+        db.messages.toArray(),
+        db.files.toArray()
       ]);
       const { openaiApiKey, anthropicApiKey, geminiApiKey, ...safeSettings } = settings;
       const payload = {
         exportedAt: new Date().toISOString(),
-        version: 1,
+        version: 2,
         settings: safeSettings,
         chats: exportChats,
-        messages: exportMessages
+        messages: exportMessages,
+        files: exportFiles
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -915,11 +1015,12 @@ const app = createApp({
       chats, currentChatId, currentChat, messages,
       pinnedChats, unpinnedChats,
       streaming, streamingContent, inputText, attachments,
+      chatFiles, chatFilesTokens, pendingDocIds,
       editingTitle, titleDraft, titleInput, messageStream, inputArea, fileInput,
       saveSetting, toggleTheme,
       createChat, selectChat, renameChat, togglePin, deleteChat,
       startEditTitle, commitTitle, exportData,
-      sendMessage, triggerFileInput, handleFiles, removeAttachment, autoResizeInput,
+      sendMessage, triggerFileInput, handleFiles, removeAttachment, removeChatFile, autoResizeInput,
       renderMarkdown
     };
   }
