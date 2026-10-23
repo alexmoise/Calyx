@@ -341,6 +341,15 @@
             class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
           <p class="text-xs text-slate-400 mt-1">Warn when a chat's attached document text exceeds this estimated token count.</p>
         </div>
+
+        <!-- Max output tokens -->
+        <div>
+          <label class="block font-medium mb-1">Max Output Tokens</label>
+          <input type="number" min="1" :value="settings.maxOutputTokens"
+            @change="$emit('update', 'maxOutputTokens', $event.target.value ? +$event.target.value : null)"
+            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+          <p class="text-xs text-slate-400 mt-1">Max tokens the model may generate per reply. Leave empty for default (32000). Values above the model's limit cause an error.</p>
+        </div>
       </div>
 
       <div class="px-5 py-4 border-t border-slate-200 dark:border-slate-800 flex justify-end">
@@ -411,48 +420,70 @@ function renderMarkdown(content) {
 /* ---------------------------------------------------------------------- */
 /* API Adapters — streaming SSE                                            */
 /* ---------------------------------------------------------------------- */
-async function* parseSSE(res, provider) {
+const DEFAULT_MAX_OUTPUT_TOKENS = 32000;
+
+async function* parseSSE(res, provider, meta) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') return;
-      try {
-        const json = JSON.parse(data);
-        let chunk = '';
-        if (provider === 'anthropic') {
-          if (json.type === 'content_block_delta') chunk = json.delta?.text || '';
-        } else if (provider === 'gemini') {
-          chunk = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        } else {
-          chunk = json.choices?.[0]?.delta?.content || '';
-        }
-        if (chunk) yield chunk;
-      } catch {}
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') { meta.complete = true; return; }
+        try {
+          const json = JSON.parse(data);
+          let chunk = '';
+          if (provider === 'anthropic') {
+            if (json.type === 'content_block_delta') chunk = json.delta?.text || '';
+            else if (json.type === 'message_delta') meta.stopReason = json.delta?.stop_reason || meta.stopReason;
+            else if (json.type === 'message_stop') meta.complete = true;
+          } else if (provider === 'gemini') {
+            chunk = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const fr = json.candidates?.[0]?.finishReason;
+            if (fr) { meta.stopReason = fr; meta.complete = true; }
+          } else {
+            chunk = json.choices?.[0]?.delta?.content || '';
+            const fr = json.choices?.[0]?.finish_reason;
+            if (fr) meta.stopReason = fr;
+          }
+          if (chunk) yield chunk;
+        } catch {}
+      }
     }
+  } finally {
+    console.info('[Calyx] stream end', provider, { stopReason: meta.stopReason, complete: meta.complete });
   }
 }
 
-async function* streamOpenAI(msgs, settings) {
+async function* streamOpenAI(msgs, settings, meta) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.openaiApiKey}` },
-    body: JSON.stringify({ model: settings.selectedModel, messages: msgs, stream: true })
+    body: JSON.stringify({
+      model: settings.selectedModel,
+      messages: msgs,
+      stream: true,
+      max_completion_tokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS
+    })
   });
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`);
-  yield* parseSSE(res, 'openai');
+  yield* parseSSE(res, 'openai', meta);
 }
 
-async function* streamAnthropic(msgs, settings, systemPrompt, docsBlock) {
-  const body = { model: settings.selectedModel, max_tokens: 8192, stream: true, messages: msgs };
+async function* streamAnthropic(msgs, settings, systemPrompt, docsBlock, meta) {
+  const body = {
+    model: settings.selectedModel,
+    max_tokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS,
+    stream: true,
+    messages: msgs
+  };
   const systemBlocks = [];
   if (systemPrompt) systemBlocks.push({ type: 'text', text: systemPrompt });
   if (docsBlock) systemBlocks.push({ type: 'text', text: docsBlock, cache_control: { type: 'ephemeral' } });
@@ -468,14 +499,14 @@ async function* streamAnthropic(msgs, settings, systemPrompt, docsBlock) {
     body: JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-  yield* parseSSE(res, 'anthropic');
+  yield* parseSSE(res, 'anthropic', meta);
 }
 
-async function* streamGemini(msgs, settings, systemPrompt, docsBlock) {
+async function* streamGemini(msgs, settings, systemPrompt, docsBlock, meta) {
   const modelId = settings.selectedModel.startsWith('models/') ? settings.selectedModel : `models/${settings.selectedModel}`;
   const url = `https://generativelanguage.googleapis.com/v1beta/${modelId}:streamGenerateContent?key=${settings.geminiApiKey}&alt=sse`;
   const contents = msgs.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
-  const body = { contents };
+  const body = { contents, generationConfig: { maxOutputTokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS } };
   const sysParts = [];
   if (systemPrompt) sysParts.push({ text: systemPrompt });
   if (docsBlock) sysParts.push({ text: docsBlock });
@@ -486,7 +517,7 @@ async function* streamGemini(msgs, settings, systemPrompt, docsBlock) {
     body: JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
-  yield* parseSSE(res, 'gemini');
+  yield* parseSSE(res, 'gemini', meta);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -562,7 +593,8 @@ const DEFAULT_SETTINGS = {
   geminiApiKey: '',
   pdfPageLimit: 20,
   pdfSizeLimitMB: 10,
-  docTokenWarn: 100000
+  docTokenWarn: 100000,
+  maxOutputTokens: null
 };
 
 async function loadSettingsFromDb() {
@@ -930,25 +962,33 @@ const app = createApp({
       streaming.value = true;
       streamingContent.value = '';
 
+      const meta = { stopReason: null, complete: false };
+      const TRUNCATED_REASONS = ['max_tokens', 'length', 'MAX_TOKENS'];
+
       try {
         let gen;
         if (settings.selectedProvider === 'anthropic') {
           if (!settings.anthropicApiKey) throw new Error('Anthropic API key not set');
-          gen = streamAnthropic(history, settings, systemPrompt, docsBlock);
+          gen = streamAnthropic(history, settings, systemPrompt, docsBlock, meta);
         } else if (settings.selectedProvider === 'gemini') {
           if (!settings.geminiApiKey) throw new Error('Gemini API key not set');
-          gen = streamGemini(history, settings, systemPrompt, docsBlock);
+          gen = streamGemini(history, settings, systemPrompt, docsBlock, meta);
         } else {
           if (!settings.openaiApiKey) throw new Error('OpenAI API key not set');
           let systemContent = systemPrompt;
           if (docsBlock) systemContent = systemContent ? `${systemContent}\n\n${docsBlock}` : docsBlock;
           const oaiMsgs = systemContent ? [{ role: 'system', content: systemContent }, ...history] : history;
-          gen = streamOpenAI(oaiMsgs, settings);
+          gen = streamOpenAI(oaiMsgs, settings, meta);
         }
 
         for await (const chunk of gen) {
           streamingContent.value += chunk;
           await nextTick(); scrollToBottom();
+        }
+
+        if (TRUNCATED_REASONS.includes(meta.stopReason) || !meta.complete) {
+          const reason = meta.stopReason || 'stream ended early';
+          streamingContent.value += `\n\n⚠️ Response truncated (${reason})`;
         }
 
         // Persist assistant message
