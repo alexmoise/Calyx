@@ -97,7 +97,9 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
   * Light/dark theme toggle (persisted).
 
 * **Data Portability:**
-  * Full database export (chats, messages, files, settings) to a JSON file, excluding stored API keys.
+  * **Full export:** Every stored table — chats, messages, files, settings, and any future table added to the database — is streamed into a single gzip-compressed NDJSON backup file (`calyx-backup-<timestamp>.ndjson.gz`), with no size-driven memory ceiling. API keys and any other credential-shaped field (tokens, secrets, passwords, authorization headers) are always excluded.
+  * **Full import:** Restore from a Calyx backup (or a legacy JSON export) in two modes — **Replace** (wipe local data and restore from the file) or **Merge** (add file records to local data, newest `updatedAt` wins on conflict). API keys are never imported; your locally configured keys are always kept.
+  * The backup file is validated end-to-end (format, schema compatibility, record integrity) before any data is written, and the browser's native "Save As" dialog is used where supported so you choose exactly where backups are written.
 
 * **Feedback:**
   * Toast notifications for errors and confirmations.
@@ -121,7 +123,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 * **Formatted Chat Export & Archival:**
   * **Markdown Export:** Clean, human-readable `.md` output containing timestamps, system prompts, and message bodies.
   * **Self-Contained HTML Export:** Styled, standalone read-only transcripts ready for sharing.
-  * **Backup Restore:** Import a previously exported JSON backup to restore chats/messages/settings.
 
 * **Generation Control:**
   * **Stop Generation:** Instant cancellation of an in-flight response using `AbortController`.
@@ -203,7 +204,7 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 These rules are non-negotiable for all future development iterations and must be enforced at every phase.
 
-* **Export/Import Parity:** Every setting and schema change must be fully reflected in the JSON export/import pipeline. No setting may exist that cannot round-trip through a backup file.
+* **Export/Import Parity:** The backup pipeline iterates all Dexie tables generically — any new table or field is included automatically with no code change required. The only permitted exclusion is secret-shaped fields (API keys, tokens, passwords, authorization headers), which are stripped on export and ignored on import by a central pattern-based registry (see `plans/architecture.md` §7.1). No non-secret setting may exist that cannot round-trip through a backup file.
 * **Remote Sync Coverage:** Every setting and piece of user content must be included in the remote sync payload when a remote storage target is configured. Partial sync is not permitted.
 * **Minimal HTML Footprint:** `index.html` must remain as small as possible. Heavy libraries, renderers, and optional features must be loaded dynamically from CDNs at runtime — never bundled inline.
 * **Pinned CDN Versions:** All CDN dependencies must reference a specific, immutable version (e.g., `@1.2.3`). Unpinned or `@latest` references are prohibited to prevent upstream breaking changes.

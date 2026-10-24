@@ -125,15 +125,21 @@
 
     <div class="p-2 border-t border-slate-200 dark:border-slate-800 flex gap-1">
       <button @click="exportData" title="Export data"
-        class="flex-1 flex items-center gap-2 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-sm px-3 py-2 transition-colors">
-        <icon name="Download" :size="16"></icon>
+        class="flex-1 flex items-center gap-1.5 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-xs px-2 py-2 transition-colors">
+        <icon name="Download" :size="15"></icon>
         Export
       </button>
+      <button @click="triggerImportInput" title="Import data"
+        class="flex-1 flex items-center gap-1.5 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-xs px-2 py-2 transition-colors">
+        <icon name="Upload" :size="15"></icon>
+        Import
+      </button>
       <button @click="showSettings = true" title="Settings"
-        class="flex-1 flex items-center gap-2 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-sm px-3 py-2 transition-colors">
-        <icon name="Settings" :size="16"></icon>
+        class="flex-1 flex items-center gap-1.5 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-xs px-2 py-2 transition-colors">
+        <icon name="Settings" :size="15"></icon>
         Settings
       </button>
+      <input ref="importFileInput" type="file" accept=".gz,.json" class="hidden" @change="handleImportFile">
     </div>
   </aside>
 
@@ -247,6 +253,31 @@
 
   <!-- ============ SETTINGS MODAL ============ -->
   <settings-modal v-if="showSettings" :settings="settings" @close="showSettings = false" @update="saveSetting"></settings-modal>
+
+  <!-- ============ IMPORT MODAL ============ -->
+  <div v-if="showImportModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="cancelImport">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-5 flex flex-col gap-4 text-sm">
+      <h2 class="text-base font-semibold">Import Backup</h2>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" value="merge" v-model="importMode">
+        Merge — add to existing data, newer record wins on conflict
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" value="replace" v-model="importMode">
+        Replace — erase all local data and restore from file
+      </label>
+      <p v-if="importMode === 'replace'" class="text-xs text-red-500">
+        This permanently deletes all current chats, messages, and files. API keys are kept.
+      </p>
+      <div class="flex items-center justify-between pt-2">
+        <button @click="exportData" class="text-xs text-indigo-500 hover:underline">Back up first</button>
+        <div class="flex gap-2">
+          <button @click="cancelImport" class="rounded-lg px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Cancel</button>
+          <button @click="confirmImport" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ============ TOASTS ============ -->
   <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
@@ -568,20 +599,108 @@ function buildDocsBlock(files) {
 }
 
 /* ---------------------------------------------------------------------- */
+/* Secret field registry                                                   */
+/* ---------------------------------------------------------------------- */
+// Any object key ending in one of these suffixes is treated as a secret:
+// stripped on export, ignored on import, always preserved locally. Keep this
+// pattern in sync with plans/architecture.md when adding new secret-bearing
+// fields (e.g. future MCP server tokens/headers).
+const SECRET_KEY_PATTERN = /(apikey|token|secret|password|authorization)$/i;
+
+function isSecretKey(key) {
+  return SECRET_KEY_PATTERN.test(key);
+}
+
+// Recursively strips properties matching SECRET_KEY_PATTERN from any
+// record/array, so future tables with nested secrets (e.g. MCP server
+// `headers.Authorization`) are protected automatically.
+function stripSecretProps(value) {
+  if (Array.isArray(value)) return value.map(stripSecretProps);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (isSecretKey(k)) continue;
+      out[k] = stripSecretProps(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/* ---------------------------------------------------------------------- */
 /* Database                                                                */
 /* ---------------------------------------------------------------------- */
-const db = new Dexie('CalyxDB');
+const LEGACY_DB_NAME = 'CalyxDB';
+const db = new Dexie('Calyx');
 db.version(1).stores({
-  chats: '++id, updatedAt, isPinned',
-  messages: '++id, chatId, createdAt',
-  settings: 'key'
-});
-db.version(2).stores({
-  chats: '++id, updatedAt, isPinned',
-  messages: '++id, chatId, createdAt',
+  chats: 'id, updatedAt, isPinned',
+  messages: 'id, chatId, createdAt',
   settings: 'key',
-  files: '++id, chatId, hash'
+  files: 'id, chatId, hash'
 });
+
+// One-time migration from the legacy integer-keyed CalyxDB into the current
+// UUID-keyed Calyx database. Safe to call on every boot: it no-ops once
+// Calyx already holds data, and cleans up a lingering legacy DB if deletion
+// failed on a previous run.
+async function migrateLegacyDb() {
+  if (!(await Dexie.exists(LEGACY_DB_NAME))) return;
+
+  const calyxEmpty = (await db.chats.count()) === 0 && (await db.messages.count()) === 0 &&
+    (await db.files.count()) === 0 && (await db.settings.count()) === 0;
+  if (!calyxEmpty) {
+    try { await Dexie.delete(LEGACY_DB_NAME); } catch {}
+    return;
+  }
+
+  const legacy = new Dexie(LEGACY_DB_NAME);
+  legacy.version(1).stores({ chats: '++id, updatedAt, isPinned', messages: '++id, chatId, createdAt', settings: 'key' });
+  legacy.version(2).stores({ chats: '++id, updatedAt, isPinned', messages: '++id, chatId, createdAt', settings: 'key', files: '++id, chatId, hash' });
+
+  try {
+    const [legacyChats, legacyMessages, legacyFiles, legacySettings] = await Promise.all([
+      legacy.chats.toArray(), legacy.messages.toArray(), legacy.files.toArray(), legacy.settings.toArray()
+    ]);
+    const chatIdMap = new Map();
+    const newChats = legacyChats.map(c => {
+      const id = crypto.randomUUID();
+      chatIdMap.set(c.id, id);
+      const { id: _old, ...rest } = c;
+      return { ...rest, id, updatedAt: rest.updatedAt ?? Date.now() };
+    });
+    const newMessages = legacyMessages.map(m => {
+      const { id: _old, chatId, ...rest } = m;
+      return { ...rest, id: crypto.randomUUID(), chatId: chatIdMap.get(chatId), updatedAt: rest.updatedAt ?? rest.createdAt ?? Date.now() };
+    });
+    const newFiles = legacyFiles.map(f => {
+      const { id: _old, chatId, ...rest } = f;
+      return { ...rest, id: crypto.randomUUID(), chatId: chatIdMap.get(chatId), updatedAt: rest.updatedAt ?? rest.createdAt ?? Date.now() };
+    });
+
+    await db.transaction('rw', db.chats, db.messages, db.files, db.settings, async () => {
+      await db.chats.bulkPut(newChats);
+      await db.messages.bulkPut(newMessages);
+      await db.files.bulkPut(newFiles);
+      await db.settings.bulkPut(legacySettings);
+    });
+
+    const [chatCount, msgCount, fileCount] = await Promise.all([db.chats.count(), db.messages.count(), db.files.count()]);
+    if (chatCount !== newChats.length || msgCount !== newMessages.length || fileCount !== newFiles.length) {
+      throw new Error('Migrated record counts do not match the legacy database');
+    }
+    legacy.close();
+    await Dexie.delete(LEGACY_DB_NAME);
+  } catch (err) {
+    legacy.close();
+    console.error('[Calyx] Legacy database migration failed:', err);
+    throw new Error(`Legacy data migration failed: ${err.message}. Your old data in "${LEGACY_DB_NAME}" was not deleted.`);
+  }
+}
+
+const BACKUP_FORMAT = 'calyx-backup';
+const BACKUP_VERSION = 3;
+const DB_SCHEMA_VERSION = 1;
+const IMPORT_BATCH_SIZE = 500;
 
 const DEFAULT_SETTINGS = {
   theme: 'dark',
@@ -604,7 +723,263 @@ async function loadSettingsFromDb() {
 }
 
 async function persistSetting(key, value) {
-  await db.settings.put({ key, value });
+  await db.settings.put({ key, value, updatedAt: Date.now() });
+}
+
+/* ---------------------------------------------------------------------- */
+/* Backup Export / Import                                                  */
+/* ---------------------------------------------------------------------- */
+const EXPORT_PAGE_SIZE = 500;
+
+function assertStreamingCompressionSupported() {
+  if (typeof CompressionStream === 'undefined' || typeof DecompressionStream === 'undefined') {
+    throw new Error('This browser lacks compression stream support; use a recent Chrome, Edge, or Firefox.');
+  }
+}
+
+// Reads every table generically (future tables round-trip automatically)
+// and yields NDJSON lines: one header, N records, one footer with counts.
+async function* generateBackupLines() {
+  const tableNames = db.tables.map(t => t.name);
+  const counts = {};
+  yield JSON.stringify({ type: 'header', format: BACKUP_FORMAT, version: BACKUP_VERSION, dbSchema: DB_SCHEMA_VERSION, exportedAt: new Date().toISOString() }) + '\n';
+  for (const name of tableNames) {
+    const table = db.table(name);
+    counts[name] = 0;
+    let offset = 0;
+    while (true) {
+      const page = await table.offset(offset).limit(EXPORT_PAGE_SIZE).toArray();
+      if (!page.length) break;
+      for (const record of page) {
+        if (name === 'settings' && isSecretKey(record.key)) continue;
+        yield JSON.stringify({ type: 'record', table: name, data: stripSecretProps(record) }) + '\n';
+        counts[name]++;
+      }
+      offset += page.length;
+      if (page.length < EXPORT_PAGE_SIZE) break;
+    }
+  }
+  yield JSON.stringify({ type: 'footer', counts }) + '\n';
+}
+
+function backupLineStream() {
+  const gen = generateBackupLines();
+  return new ReadableStream({
+    async pull(controller) {
+      const { value, done } = await gen.next();
+      if (done) { controller.close(); return; }
+      controller.enqueue(value);
+    }
+  });
+}
+
+async function exportData() {
+  try {
+    assertStreamingCompressionSupported();
+    const gzipStream = backupLineStream()
+      .pipeThrough(new TextEncoderStream())
+      .pipeThrough(new CompressionStream('gzip'));
+    const filename = `calyx-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson.gz`;
+
+    if (window.showSaveFilePicker) {
+      let handle;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'Calyx Backup', accept: { 'application/gzip': ['.gz'] } }]
+        });
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        throw err;
+      }
+      const writable = await handle.createWritable();
+      await gzipStream.pipeTo(writable);
+    } else {
+      const blob = await new Response(gzipStream).blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+    showToast('Data exported successfully');
+  } catch (err) {
+    showToast(`Export failed: ${err.message}`, 'error');
+  }
+}
+
+async function sniffGzip(file) {
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  return head.length === 2 && head[0] === 0x1f && head[1] === 0x8b;
+}
+
+// Decompresses and line-splits the backup file without loading it whole into memory.
+async function* readNdjsonLines(file) {
+  const reader = file.stream()
+    .pipeThrough(new DecompressionStream('gzip'))
+    .pipeThrough(new TextDecoderStream())
+    .getReader();
+  let buf = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim()) yield line;
+      }
+    }
+    if (buf.trim()) yield buf;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Pass 1: validates the entire file (header, record shapes, footer counts)
+// without writing anything. Throws on the first problem found.
+async function validateBackupFile(file) {
+  const tableNames = new Set(db.tables.map(t => t.name));
+  let sawHeader = false, sawFooter = false;
+  const counts = {};
+  for await (const line of readNdjsonLines(file)) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { throw new Error('Corrupt backup: invalid JSON line'); }
+    if (obj.type === 'header') {
+      if (sawHeader) throw new Error('Corrupt backup: duplicate header');
+      if (obj.format !== BACKUP_FORMAT) throw new Error('Not a Calyx backup file');
+      if (typeof obj.dbSchema === 'number' && obj.dbSchema > DB_SCHEMA_VERSION) {
+        throw new Error('Backup was created by a newer version of Calyx; update Calyx first');
+      }
+      sawHeader = true;
+    } else if (obj.type === 'record') {
+      if (!sawHeader) throw new Error('Corrupt backup: record before header');
+      if (sawFooter) throw new Error('Corrupt backup: record after footer');
+      if (typeof obj.table !== 'string' || !obj.data || typeof obj.data !== 'object') {
+        throw new Error('Corrupt backup: malformed record');
+      }
+      if (!tableNames.has(obj.table)) continue;
+      counts[obj.table] = (counts[obj.table] || 0) + 1;
+    } else if (obj.type === 'footer') {
+      if (!sawHeader) throw new Error('Corrupt backup: footer before header');
+      sawFooter = true;
+      for (const [table, expected] of Object.entries(obj.counts || {})) {
+        if (tableNames.has(table) && (counts[table] || 0) !== expected) {
+          throw new Error(`Corrupt backup: truncated "${table}" data (expected ${expected}, found ${counts[table] || 0})`);
+        }
+      }
+    } else {
+      throw new Error('Corrupt backup: unknown entry type');
+    }
+  }
+  if (!sawHeader || !sawFooter) throw new Error('Corrupt backup: missing header or footer');
+}
+
+// Pass 2: re-reads the already-validated file and writes it in batches.
+async function writeBackupFile(file, mode) {
+  const tableNames = db.tables.map(t => t.name);
+
+  if (mode === 'replace') {
+    await db.transaction('rw', db.tables, async () => {
+      for (const name of tableNames) {
+        if (name === 'settings') {
+          const secretRows = (await db.settings.toArray()).filter(r => isSecretKey(r.key));
+          await db.settings.clear();
+          if (secretRows.length) await db.settings.bulkPut(secretRows);
+        } else {
+          await db.table(name).clear();
+        }
+      }
+    });
+  }
+
+  const batches = Object.fromEntries(tableNames.map(n => [n, []]));
+  async function flush(name, force) {
+    const batch = batches[name];
+    if (!batch.length || (!force && batch.length < IMPORT_BATCH_SIZE)) return;
+    const toWrite = batch.splice(0, batch.length);
+    if (name === 'settings') {
+      if (mode === 'replace') await db.settings.bulkPut(toWrite);
+      return; // merge keeps local settings
+    }
+    if (mode === 'replace') {
+      await db.table(name).bulkPut(toWrite);
+    } else {
+      const existing = await db.table(name).bulkGet(toWrite.map(r => r.id));
+      const winners = toWrite.filter((r, i) => !existing[i] || (r.updatedAt ?? 0) > (existing[i].updatedAt ?? 0));
+      if (winners.length) await db.table(name).bulkPut(winners);
+    }
+  }
+
+  for await (const line of readNdjsonLines(file)) {
+    const obj = JSON.parse(line);
+    if (obj.type !== 'record' || !tableNames.includes(obj.table)) continue;
+    if (obj.table === 'settings' && isSecretKey(obj.data.key)) continue;
+    batches[obj.table].push(stripSecretProps(obj.data));
+    await flush(obj.table, false);
+  }
+  for (const name of tableNames) await flush(name, true);
+}
+
+// Imports a legacy v2 JSON export (pre-UUID). IDs are freshly generated,
+// so merge never collides with existing records.
+async function importLegacyJson(file, mode) {
+  let payload;
+  try { payload = JSON.parse(await file.text()); } catch { throw new Error('Not a valid JSON file'); }
+  if (payload.version !== 2 || !Array.isArray(payload.chats)) throw new Error('Unrecognized backup format');
+
+  const now = Date.now();
+  const chatIdMap = new Map();
+  const chats = payload.chats.map(c => {
+    const id = crypto.randomUUID();
+    chatIdMap.set(c.id, id);
+    const { id: _old, ...rest } = c;
+    return { ...rest, id, updatedAt: rest.updatedAt ?? now };
+  });
+  const remap = (rows) => (rows || []).map(r => {
+    const { id: _old, chatId, ...rest } = r;
+    return { ...rest, id: crypto.randomUUID(), chatId: chatIdMap.get(chatId), updatedAt: rest.updatedAt ?? rest.createdAt ?? now };
+  });
+  const messages = remap(payload.messages);
+  const files = remap(payload.files);
+  const settingsRows = Object.entries(payload.settings || {})
+    .filter(([key]) => !isSecretKey(key))
+    .map(([key, value]) => ({ key, value, updatedAt: now }));
+
+  if (mode === 'replace') {
+    await db.transaction('rw', db.chats, db.messages, db.files, db.settings, async () => {
+      await db.chats.clear(); await db.messages.clear(); await db.files.clear();
+      const secretRows = (await db.settings.toArray()).filter(r => isSecretKey(r.key));
+      await db.settings.clear();
+      if (secretRows.length) await db.settings.bulkPut(secretRows);
+      await db.chats.bulkPut(chats);
+      await db.messages.bulkPut(messages);
+      await db.files.bulkPut(files);
+      await db.settings.bulkPut(settingsRows);
+    });
+  } else {
+    await db.chats.bulkPut(chats);
+    await db.messages.bulkPut(messages);
+    await db.files.bulkPut(files);
+  }
+}
+
+async function performImport(file, mode) {
+  try {
+    if (await sniffGzip(file)) {
+      assertStreamingCompressionSupported();
+      await validateBackupFile(file);
+      await writeBackupFile(file, mode);
+    } else {
+      await importLegacyJson(file, mode);
+    }
+    showToast('Data imported successfully');
+    return true;
+  } catch (err) {
+    showToast(`Import failed: ${err.message}`, 'error');
+    return false;
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -788,7 +1163,9 @@ const app = createApp({
 
     async function createChat() {
       const now = Date.now();
-      const id = await db.chats.add({
+      const id = crypto.randomUUID();
+      await db.chats.add({
+        id,
         title: 'New Chat',
         createdAt: now,
         updatedAt: now,
@@ -815,7 +1192,7 @@ const app = createApp({
     }
 
     async function togglePin(chat) {
-      await db.chats.update(chat.id, { isPinned: !chat.isPinned });
+      await db.chats.update(chat.id, { isPinned: !chat.isPinned, updatedAt: Date.now() });
       await refreshChats();
     }
 
@@ -862,8 +1239,9 @@ const app = createApp({
         return;
       }
       const tokens = estimateTokens(text);
-      const record = { chatId: currentChatId.value, name, type, hash, text, tokens, createdAt: Date.now() };
-      record.id = await db.files.add(record);
+      const now = Date.now();
+      const record = { id: crypto.randomUUID(), chatId: currentChatId.value, name, type, hash, text, tokens, createdAt: now, updatedAt: now };
+      await db.files.add(record);
       chatFiles.value.push(record);
       pendingDocIds.value.push(record.id);
       if (chatFilesTokens.value > settings.docTokenWarn) {
@@ -925,10 +1303,12 @@ const app = createApp({
 
       const now = Date.now();
       const userMsg = {
+        id: crypto.randomUUID(),
         chatId: currentChatId.value,
         role: 'user',
         content,
         createdAt: now,
+        updatedAt: now,
         attachments: [
           ...pendingDocIds.value.map(id => {
             const f = chatFiles.value.find(x => x.id === id);
@@ -937,8 +1317,7 @@ const app = createApp({
           ...attachments.value.map(a => ({ type: a.type, name: a.name }))
         ]
       };
-      const userMsgId = await db.messages.add(userMsg);
-      userMsg.id = userMsgId;
+      await db.messages.add(userMsg);
       messages.value.push(userMsg);
 
       const autoTitleSource = content;
@@ -992,15 +1371,17 @@ const app = createApp({
         }
 
         // Persist assistant message
+        const asstNow = Date.now();
         const asstMsg = {
+          id: crypto.randomUUID(),
           chatId: currentChatId.value,
           role: 'assistant',
           content: streamingContent.value,
-          createdAt: Date.now(),
+          createdAt: asstNow,
+          updatedAt: asstNow,
           attachments: []
         };
-        const asstId = await db.messages.add(asstMsg);
-        asstMsg.id = asstId;
+        await db.messages.add(asstMsg);
         messages.value.push(asstMsg);
         await db.chats.update(currentChatId.value, { updatedAt: Date.now() });
         await refreshChats();
@@ -1013,33 +1394,57 @@ const app = createApp({
       }
     }
 
-    /* ---- Export ---- */
-    async function exportData() {
-      const [exportChats, exportMessages, exportFiles] = await Promise.all([
-        db.chats.toArray(),
-        db.messages.toArray(),
-        db.files.toArray()
-      ]);
-      const { openaiApiKey, anthropicApiKey, geminiApiKey, ...safeSettings } = settings;
-      const payload = {
-        exportedAt: new Date().toISOString(),
-        version: 2,
-        settings: safeSettings,
-        chats: exportChats,
-        messages: exportMessages,
-        files: exportFiles
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `calyx-export-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast('Data exported successfully');
+    /* ---- Import ---- */
+    const showImportModal = ref(false);
+    const importMode = ref('merge');
+    const importFileInput = ref(null);
+    const pendingImportFile = ref(null);
+
+    function triggerImportInput() {
+      if (streaming.value) return;
+      importFileInput.value?.click();
+    }
+
+    function handleImportFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      pendingImportFile.value = file;
+      importMode.value = 'merge';
+      showImportModal.value = true;
+    }
+
+    function cancelImport() {
+      showImportModal.value = false;
+      pendingImportFile.value = null;
+    }
+
+    async function confirmImport() {
+      const file = pendingImportFile.value;
+      const mode = importMode.value;
+      showImportModal.value = false;
+      pendingImportFile.value = null;
+      if (!file) return;
+
+      const ok = await performImport(file, mode);
+      if (!ok) return;
+
+      const loaded = await loadSettingsFromDb();
+      Object.assign(settings, loaded);
+      applyTheme();
+      await refreshChats();
+      currentChatId.value = null;
+      messages.value = [];
+      chatFiles.value = [];
+      pendingDocIds.value = [];
     }
 
     onMounted(async () => {
+      try {
+        await migrateLegacyDb();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
       const loaded = await loadSettingsFromDb();
       Object.assign(settings, loaded);
       applyTheme();
@@ -1057,9 +1462,11 @@ const app = createApp({
       streaming, streamingContent, inputText, attachments,
       chatFiles, chatFilesTokens, pendingDocIds,
       editingTitle, titleDraft, titleInput, messageStream, inputArea, fileInput,
+      showImportModal, importMode, importFileInput,
       saveSetting, toggleTheme,
       createChat, selectChat, renameChat, togglePin, deleteChat,
       startEditTitle, commitTitle, exportData,
+      triggerImportInput, handleImportFile, cancelImport, confirmImport,
       sendMessage, triggerFileInput, handleFiles, removeAttachment, removeChatFile, autoResizeInput,
       renderMarkdown
     };

@@ -11,16 +11,23 @@
 *   **PDF Parsing:** PDF.js (via CDN) for client-side text extraction.
 
 ## 2. Storage Schema (IndexedDB / Dexie)
-*   **`chats`**: `id`, `title`, `updatedAt`, `createdAt`, `isPinned`, `systemPrompt` (override).
-*   **`messages`**: `id`, `chatId` (indexed), `role` (user/assistant), `content`, `createdAt`, `attachments` (array of objects: `{ type, name }` — image attachments additionally carry `data`/`mimeType` in-memory only, never persisted with the message).
-*   **`files`** (v2): `id`, `chatId` (indexed), `name`, `type` (`text`/`pdf`), `hash` (indexed, SHA-256 of normalized text, used for dedup), `text`, `tokens` (estimated), `createdAt`. Chat-scoped document attachments, decoupled from individual messages so they persist across every turn.
-*   **`settings`**: Key-value pairs.
+Database name: **`Calyx`** (schema version 1). The legacy `CalyxDB` (integer `++id` keys) is migrated once on boot — see §7 — and deleted after a verified copy.
+
+*   **`id`** fields across all tables are **string UUIDs** (`crypto.randomUUID()`), not auto-increment integers. This allows records from independent databases (imports, future sync) to merge without ID collisions.
+*   Every mutable record carries an **`updatedAt`** timestamp (ms epoch), used for last-write-wins conflict resolution on import merge and future remote sync.
+*   **`chats`**: `id`, `title`, `createdAt`, `updatedAt`, `isPinned`, `systemPrompt` (override).
+*   **`messages`**: `id`, `chatId` (indexed), `role` (user/assistant), `content`, `createdAt`, `updatedAt`, `attachments` (array of objects: `{ type, name }` — image attachments additionally carry `data`/`mimeType` in-memory only, never persisted with the message).
+*   **`files`**: `id`, `chatId` (indexed), `name`, `type` (`text`/`pdf`), `hash` (indexed, SHA-256 of normalized text, used for dedup), `text`, `tokens` (estimated), `createdAt`, `updatedAt`. Chat-scoped document attachments, decoupled from individual messages so they persist across every turn.
+*   **`settings`**: Key-value pairs (`{ key, value, updatedAt }`).
     *   `systemPrompt` (Global)
-    *   `openaiApiKey`, `anthropicApiKey`, `geminiApiKey`
+    *   `openaiApiKey`, `anthropicApiKey`, `geminiApiKey` — **secret**, see §7.1
     *   `selectedModel` (Default: `gpt-5.6-terra`, `claude-sonnet-5`, `gemini-3.1-pro-preview`)
     *   `theme` (light/dark)
     *   `pdfPageLimit` / `pdfSizeLimit`
     *   `docTokenWarn` (estimated token threshold for the chat-files warning toast; default `100000`)
+    *   `maxOutputTokens`
+
+**Future tables** (agents, memories, MCP server definitions, skills, to-dos, etc.) must declare an `id` (UUID) primary key and an `updatedAt` field to automatically participate in export/import/sync — see §7.
 
 ## 3. Model API Abstraction Layer
 A unified class/functions to handle API communication, supporting **streaming** for all providers.
@@ -47,4 +54,41 @@ A unified class/functions to handle API communication, supporting **streaming** 
 *   **Modals:** Settings window (API keys, models, prompts, theme, PDF limits).
 
 ## 6. Data Portability
-*   **Export:** Ability to export `chats`, `messages`, `files`, and `settings` (excluding API keys) as a JSON file for backup and portability across devices.
+*   **Export:** Streams every Dexie table (`db.tables`, generic — no hardcoded list) into a gzip-compressed NDJSON file (`calyx-backup-<ISO>.ndjson.gz`), excluding secret fields (§7.1). Uses `showSaveFilePicker` where supported (user picks the save location), falling back to a normal `<a download>` otherwise.
+*   **Import:** Accepts the current `.ndjson.gz` format or a legacy v2 `.json` export. Two modes:
+    *   **Replace** — wipes all local data (secrets excepted) and restores from the file.
+    *   **Merge** — adds file records to local data; on an `id` collision, the record with the greater `updatedAt` wins.
+*   See §7 for the full format, validation, and secret-handling specification.
+
+## 7. Backup Format, Secret Registry & Import Pipeline
+Full specification: [`plans/import-export.md`](import-export.md).
+
+### 7.1 Secret Field Registry
+A single pattern governs which fields are treated as secrets everywhere (export stripping, import ignoring, UI masking):
+
+```js
+const SECRET_KEY_PATTERN = /(apikey|token|secret|password|authorization)$/i;
+```
+
+Any object key (including nested, e.g. a future MCP server's `headers.Authorization`) matching this pattern is:
+*   **Stripped** from every export (never written to a backup file).
+*   **Ignored** on every import (never overwritten from a file).
+*   **Always preserved locally**, even when using Replace mode.
+
+**When adding any new secret-bearing field** (API keys, MCP server auth tokens/headers, future OAuth tokens, etc.), name it so it ends in `apiKey`, `Token`, `Secret`, `Password`, or `Authorization` to be covered automatically. If a field cannot be named this way, it must be added explicitly to the registry in `index.html` and documented here.
+
+### 7.2 Backup File Format
+NDJSON, one JSON object per line, gzip-compressed:
+```
+{"type":"header","format":"calyx-backup","version":3,"dbSchema":1,"exportedAt":"…"}
+{"type":"record","table":"chats","data":{…}}
+…
+{"type":"footer","counts":{"chats":N,"messages":N,…}}
+```
+The footer's per-table counts are checked against the records actually read during import validation, catching truncated/corrupt files before any write occurs.
+
+### 7.3 Import Pipeline
+Two-pass: (1) full-file validation (header format/schema version, record shape, footer count match) with zero writes; (2) batched (500 records) `bulkPut` writes in a Replace or Merge transaction. See `plans/import-export.md` for the full flow diagram.
+
+### 7.4 Legacy Database Migration
+On boot, if the old integer-keyed `CalyxDB` exists and the new `Calyx` database is empty, all records are copied once with freshly generated UUIDs (chat references remapped), verified by count, and `CalyxDB` is deleted. Runs entirely in local IndexedDB — no files are written, and no network access occurs.
