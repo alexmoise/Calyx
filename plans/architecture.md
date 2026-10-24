@@ -144,7 +144,4 @@ NDJSON, one JSON object per line, gzip-compressed:
 The footer's per-table counts are checked against the records actually read during import validation, catching truncated/corrupt files before any write occurs.
 
 ### 9.3 Import Pipeline
-Two-pass: (1) full-file validation (header format/schema version, record shape, footer count match) with zero writes; (2) batched (500 records) `bulkPut` writes in a Replace or Merge transaction. See `plans/import-export.md` for the full flow diagram. Records are passed through `sanitizeRecord` (secret stripping + removal of the retired `chats.systemPrompt` field) so older backups import cleanly against the current schema.
-
-### 9.4 Legacy Database Migration
-On boot, if the old integer-keyed `CalyxDB` exists and the new `Calyx` database is empty, all records are copied once with freshly generated UUIDs (chat references remapped), verified by count, and `CalyxDB` is deleted. Runs entirely in local IndexedDB — no files are written, and no network access occurs.
+Two-pass: (1) full-file validation (header format/schema version, record shape, footer count match) with zero writes; (2) batched (500 records) `bulkPut` writes in a Replace or Merge transaction. See `plans/import-export.md` for the full flow diagram. Records are passed through `sanitizeRecord` (secret stripping + removal of the retired `chats.systemPrompt` field) so older backups import cleanly against the current schema. Only the current gzip NDJSON format (`calyx-backup`) is accepted; the one-time legacy `CalyxDB` migration and legacy plain-JSON import path were removed after confirming no deployment still depended on them.

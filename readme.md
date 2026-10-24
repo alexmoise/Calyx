@@ -98,7 +98,7 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 * **Data Portability:**
   * **Full export:** Every stored table — chats, messages, files, settings, and any future table added to the database — is streamed into a single gzip-compressed NDJSON backup file (`calyx-backup-<timestamp>.ndjson.gz`), with no size-driven memory ceiling. API keys and any other credential-shaped field (tokens, secrets, passwords, authorization headers) are always excluded.
-  * **Full import:** Restore from a Calyx backup (or a legacy JSON export) in two modes — **Replace** (wipe local data and restore from the file) or **Merge** (add file records to local data, newest `updatedAt` wins on conflict). API keys are never imported; your locally configured keys are always kept.
+  * **Full import:** Restore from a Calyx backup in two modes — **Replace** (wipe local data and restore from the file) or **Merge** (add file records to local data, newest `updatedAt` wins on conflict). API keys are never imported; your locally configured keys are always kept.
   * The backup file is validated end-to-end (format, schema compatibility, record integrity) before any data is written, and the browser's native "Save As" dialog is used where supported so you choose exactly where backups are written.
 
 * **Feedback:**
