@@ -181,11 +181,11 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
   * **Alternative Message Swapping:** Carousel through regenerated assistant responses (Turn 1 of N).
 
 * **Granular Context Controls:**
-  * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
   * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
 
 * **Browser-Native Agentic Tools:**
-  * **Specialized Agents System:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, specific inference parameters (temperature, effort, etc.), and an agent-specific system prompt.
+  * **Specialized Agents System:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, and an agent-specific system prompt.
+  * **Dynamic Inference Parameters:** Per-agent parameters defined as freeform, addable/removable name-value tags (e.g. `temperature`, `top_p`, `effort`) rather than a fixed set of fields — so agents stay compatible as providers retire or introduce new parameters over time.
   * **Skill Files:** Enhance agents by uploading local files or linking remote URLs containing specialized instructions or structured tools. These skills are "advertised" to the agent, allowing it to read them dynamically when necessary.
   * **Agent-Driven Conversations:** Start new chats by selecting a specific agent.
   * **Mid-Conversation Agent Switching:** Change the active agent at any point during a chat session. The new agent inherits the entire conversation history and context seamlessly, replacing the simpler "Mid-Conversation Provider Switching" concept.
