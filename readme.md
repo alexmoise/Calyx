@@ -4,6 +4,30 @@ A zero-backend, state-of-the-art AI workspace packaged entirely within a single,
 
 ---
 
+## Use Cases: What You Can Build With Calyx
+
+At its core, Calyx organizes work around three ideas — **Profiles** (a person, account, or project you engage with across many conversations), **Sessions** (each individual chat), and **Memory** (facts the assistant notices and keeps). Together they turn any body of work that spans multiple conversations over time — weeks, months, or years — into a system that remembers.
+
+**How it works, in three steps:**
+
+1. **Create a Profile** for each person, account, or project you work with, and give it a short persona instruction — e.g. *"You are a supportive career coach"* or *"You are a pragmatic business advisor."* This instruction shapes the assistant's behavior in every session grouped under that profile.
+2. **Just talk.** As the conversation unfolds, the assistant quietly notices and saves durable facts — decisions, goals, preferences, events — without you taking manual notes.
+3. **Pick up where you left off.** In the next session, Calyx automatically feeds the assistant a summary of past sessions plus the facts that matter most, so it has full context from the very first message — even months later.
+
+| Use Case | Profile = | Session = | What Gets Remembered |
+|---|---|---|---|
+| **Therapy & Coaching** | A client | Each appointment | Goals, patterns, agreements, life events |
+| **Business & Executive Advisory** | A company or founder | Each strategy call | Decisions, priorities, key people, commitments |
+| **Sales & Account Management** | A prospect or account | Each call or meeting | Agreements, objections, preferences, next steps |
+| **Tutoring & Learning** | A student | Each lesson | Skill level, recurring mistakes, learning goals |
+| **Legal & Clinical Case Notes** | A case or patient | Each consultation or visit | Events, decisions, status changes |
+
+Because every fact is paired with the date it was learned, the assistant can tell what's still true today from what has since changed — reasoning about evolution over time rather than contradiction.
+
+All of this runs entirely in your browser with your own API key (see below) — a meaningful advantage for sensitive use cases like therapy, legal, and medical work, where conversation data should never pass through a third-party server.
+
+---
+
 ## 1. What Calyx Is & The Gap It Fills
 
 Current AI chat software forces a compromise between two extremes:
@@ -37,10 +61,10 @@ Your keys, prompts, and chat history stay in the browser's local IndexedDB — n
 
 ## 3. Iterative Roadmap
 
-The roadmap is organized into progressive milestones. Phase 1 is complete and delivers a robust daily driver; subsequent phases introduce power-user UX, deep conversational control, and agentic protocols.
+The roadmap is organized into progressive milestones. Phases 1, 2, and 3a are complete and together deliver a robust daily driver with persistent memory; subsequent phases introduce nonlinear conversation control, specialized agents, and agentic protocols.
 
 ```
-Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branching) ──> Phase 4 (Agentic/MCP)
+Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profiles & Memory — done) ──> Phase 3b (Branching & Agents) ──> Phase 4 (Agentic/MCP)
 
 ```
 
@@ -132,7 +156,22 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 
 ---
 
-### Phase 3: Advanced Conversation Control & Specialized Agents
+### Phase 3a: Profiles & Persistent Memory — ✅ Complete
+
+*Goal: Turn Calyx into a system that remembers people, accounts, and projects across many separate conversations — the foundation for every use case in the section above.*
+
+* **Profiles:** Optional named containers (e.g., "Jane D. — Therapy", "Acme Corp — Advisory") that group related chats ("sessions") and carry a persona system prompt, layered after the global prompt.
+* **Inline Memory Capture:** The model continuously assesses the conversation and appends `<memory category="..." when="...">` tags to its replies; Calyx parses, saves, and hides them, surfacing each as a dismissible chip under the message.
+* **Membership-Derived Profile Memory:** Memories are owned by the chat they originated in; a profile's context is the live union of memories from every chat currently assigned to it. Assigning/un-assigning a chat changes context immediately — no copying, no cross-chat edits.
+* **Chronological Grounding:** Memories are never edited or superseded by the app — differences over time are left for the model to interpret as evolution, using per-memory `when`/`category`/timestamp metadata and session labels.
+* **Deterministic Memory Selection:** Pinned memories and configurable "cornerstone" categories (trait, value, goal, agreement by default) are always included; remaining memories fill by recency up to a configurable budget; memories that don't fit are still recoverable via a zero-dependency BM25 keyword-recall pass matched against the live conversation.
+* **Session Digests:** Each chat maintains a short, incrementally-updated digest injected (instead of full memories) when referencing other sessions in a profile, refreshed on chat switch, lazily before sending, or via a per-profile "Refresh digests" action.
+* **Segmented Rolling Compaction:** Older turns beyond a configurable raw-turn window are summarized into frozen "segments" (never re-summarized individually); only the oldest segments are merged further when the segment budget is exceeded. Original messages are never deleted. Auto-triggers at a configurable % of the context budget, or on demand via "Compact now".
+* **Memory Review Panel:** Per-chat panel to view, pin, edit, delete, and manually add memories, plus a read-only view of the live profile memory pool with out-of-context items greyed out.
+
+---
+
+### Phase 3b: Advanced Conversation Control & Specialized Agents
 
 *Goal: Provide nonlinear thinking tools, precise cost tracking, and persona-driven agent workflows.*
 
@@ -144,16 +183,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 * **Granular Context Controls:**
   * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
   * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
-
-* **Profiles & Persistent Memory — ✅ Implemented:**
-  * **Profiles:** Optional named containers (e.g., "Jane D. — Therapy", "Acme Corp — Advisory") that group related chats ("sessions") and carry a persona system prompt, layered after the global prompt.
-  * **Inline Memory Capture:** The model continuously assesses the conversation and appends `<memory category="..." when="...">` tags to its replies; Calyx parses, saves, and hides them, surfacing each as a dismissible chip under the message.
-  * **Membership-Derived Profile Memory:** Memories are owned by the chat they originated in; a profile's context is the live union of memories from every chat currently assigned to it. Assigning/un-assigning a chat changes context immediately — no copying, no cross-chat edits.
-  * **Chronological Grounding:** Memories are never edited or superseded by the app — differences over time are left for the model to interpret as evolution, using per-memory `when`/`category`/timestamp metadata and session labels.
-  * **Deterministic Memory Selection:** Pinned memories and configurable "cornerstone" categories (trait, value, goal, agreement by default) are always included; remaining memories fill by recency up to a configurable budget; memories that don't fit are still recoverable via a zero-dependency BM25 keyword-recall pass matched against the live conversation.
-  * **Session Digests:** Each chat maintains a short, incrementally-updated digest injected (instead of full memories) when referencing other sessions in a profile, refreshed on chat switch, lazily before sending, or via a per-profile "Refresh digests" action.
-  * **Segmented Rolling Compaction:** Older turns beyond a configurable raw-turn window are summarized into frozen "segments" (never re-summarized individually); only the oldest segments are merged further when the segment budget is exceeded. Original messages are never deleted. Auto-triggers at a configurable % of the context budget, or on demand via "Compact now".
-  * **Memory Review Panel:** Per-chat panel to view, pin, edit, delete, and manually add memories, plus a read-only view of the live profile memory pool with out-of-context items greyed out.
 
 * **Browser-Native Agentic Tools:**
   * **Specialized Agents System:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, specific inference parameters (temperature, effort, etc.), and an agent-specific system prompt.
