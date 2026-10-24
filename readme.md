@@ -130,9 +130,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 * **Model Selection:**
   * Curated per-provider model dropdown (replacing the current free-text model field).
 
-* **Per-Chat Configuration:**
-  * UI to override the global system prompt on a per-chat basis (data schema already supports this field).
-
 ---
 
 ### Phase 3: Advanced Conversation Control & Specialized Agents
@@ -147,16 +144,22 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3 (Branchin
 * **Granular Context Controls:**
   * Inference parameter controls (Temperature, Top-P, Max Output Tokens).
   * **Context Cache:** Leverage provider-side prompt/context caching (e.g., Anthropic, OpenAI) to reduce redundant token cost on repeated or growing context.
-  * **Context Compaction:** Summarize or prune older conversation turns to keep long-running chats within model context limits.
 
-* **Specialized Agents System:**
-  * **Agent Definition:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, specific inference parameters (temperature, effort, etc.), and an agent-specific system prompt.
+* **Profiles & Persistent Memory — ✅ Implemented:**
+  * **Profiles:** Optional named containers (e.g., "Jane D. — Therapy", "Acme Corp — Advisory") that group related chats ("sessions") and carry a persona system prompt, layered after the global prompt.
+  * **Inline Memory Capture:** The model continuously assesses the conversation and appends `<memory category="..." when="...">` tags to its replies; Calyx parses, saves, and hides them, surfacing each as a dismissible chip under the message.
+  * **Membership-Derived Profile Memory:** Memories are owned by the chat they originated in; a profile's context is the live union of memories from every chat currently assigned to it. Assigning/un-assigning a chat changes context immediately — no copying, no cross-chat edits.
+  * **Chronological Grounding:** Memories are never edited or superseded by the app — differences over time are left for the model to interpret as evolution, using per-memory `when`/`category`/timestamp metadata and session labels.
+  * **Deterministic Memory Selection:** Pinned memories and configurable "cornerstone" categories (trait, value, goal, agreement by default) are always included; remaining memories fill by recency up to a configurable budget; memories that don't fit are still recoverable via a zero-dependency BM25 keyword-recall pass matched against the live conversation.
+  * **Session Digests:** Each chat maintains a short, incrementally-updated digest injected (instead of full memories) when referencing other sessions in a profile, refreshed on chat switch, lazily before sending, or via a per-profile "Refresh digests" action.
+  * **Segmented Rolling Compaction:** Older turns beyond a configurable raw-turn window are summarized into frozen "segments" (never re-summarized individually); only the oldest segments are merged further when the segment budget is exceeded. Original messages are never deleted. Auto-triggers at a configurable % of the context budget, or on demand via "Compact now".
+  * **Memory Review Panel:** Per-chat panel to view, pin, edit, delete, and manually add memories, plus a read-only view of the live profile memory pool with out-of-context items greyed out.
+
+* **Browser-Native Agentic Tools:**
+  * **Specialized Agents System:** Create custom "Agents" (e.g., Law Advisor, Medical Advisor, Finance Specialist) by configuring a title, provider, model, specific inference parameters (temperature, effort, etc.), and an agent-specific system prompt.
   * **Skill Files:** Enhance agents by uploading local files or linking remote URLs containing specialized instructions or structured tools. These skills are "advertised" to the agent, allowing it to read them dynamically when necessary.
   * **Agent-Driven Conversations:** Start new chats by selecting a specific agent.
   * **Mid-Conversation Agent Switching:** Change the active agent at any point during a chat session. The new agent inherits the entire conversation history and context seamlessly, replacing the simpler "Mid-Conversation Provider Switching" concept.
-
-* **Browser-Native Agentic Tools:**
-  * **Long-Term Memory:** Cross-chat persistence of user facts, preferences, and context stored in IndexedDB. Automatically retrieved and injected into system prompts to maintain continuity across sessions.
   * **Native Task Management (ToDo):** Built-in tool calling allowing the LLM to read, write, and manage a persistent ToDo list stored in IndexedDB, rendered natively in the UI.
 
 * **Dual-Model Compare Mode:**
