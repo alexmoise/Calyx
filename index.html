@@ -247,7 +247,8 @@
           </div>
         </template>
 
-        <message-bubble v-for="msg in messages" :key="msg.id" :msg="msg" :memories="chatMemories" @delete-memory="deleteMemory"></message-bubble>
+        <message-bubble v-for="msg in messages" :key="msg.id" :msg="msg" :memories="chatMemories" :chat-ids="chatIds"
+          @delete-memory="deleteMemory" @create-session="createBranchSession" @dismiss-session="dismissSessionProposal" @open-chat="selectChat"></message-bubble>
 
         <!-- Streaming assistant bubble -->
         <div v-if="streaming" class="flex justify-start">
@@ -550,6 +551,11 @@
               </label>
             </div>
           </div>
+
+          <label class="flex items-center gap-2 text-xs cursor-pointer">
+            <input type="checkbox" :checked="settings.branchSessions" @change="$emit('update', 'branchSessions', $event.target.checked)">
+            Allow AI to propose new sessions for drifting topics (profile chats only)
+          </label>
         </div>
 
         <!-- PDF limits -->
@@ -613,6 +619,31 @@
           {{ m.category }}
           <button @click="$emit('delete-memory', m)" class="hover:text-red-500"><icon name="X" :size="9"></icon></button>
         </span>
+      </div>
+
+      <div v-if="msg.sessionProposal" class="mt-2 pt-2 border-t border-slate-300/50 dark:border-slate-700/50 not-prose">
+        <div v-if="msg.sessionProposal.status === 'pending'" class="rounded-lg border border-indigo-400/40 bg-indigo-500/5 p-2.5 flex flex-col gap-1.5">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+            <icon name="GitBranch" :size="12"></icon> New session proposed
+          </div>
+          <input v-model.trim="titleDraft" maxlength="80"
+            class="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 text-xs font-medium">
+          <p class="text-xs opacity-70">{{ msg.sessionProposal.purpose }}</p>
+          <div class="flex gap-2 mt-1">
+            <button @click="$emit('create-session', msg, titleDraft)"
+              class="rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-2.5 py-1">Create</button>
+            <button @click="$emit('dismiss-session', msg)"
+              class="rounded-md border border-slate-300 dark:border-slate-700 text-xs px-2.5 py-1 hover:bg-slate-300/50 dark:hover:bg-slate-700/50">Dismiss</button>
+          </div>
+        </div>
+        <div v-else-if="msg.sessionProposal.status === 'created'" class="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400">
+          <icon name="GitBranch" :size="12"></icon> Session created: "{{ msg.sessionProposal.title }}"
+          <button v-if="sessionStillExists" @click="$emit('open-chat', msg.sessionProposal.chatId)" class="underline hover:no-underline">Open</button>
+          <span v-else class="opacity-60">(deleted)</span>
+        </div>
+        <div v-else class="flex items-center gap-1.5 text-xs opacity-50">
+          <icon name="GitBranch" :size="12"></icon> Session proposal dismissed
+        </div>
       </div>
     </div>
   </div>
@@ -687,6 +718,8 @@ const MEMORY_CATEGORIES = ['trait', 'value', 'goal', 'event', 'person', 'decisio
 const MEMORY_CONTENT_MAX = 500;
 const MEMORY_WHEN_MAX = 100;
 const MEMORY_TAG_RE = /<memory\s+([^>]*)>([\s\S]*?)<\/memory>/gi;
+const SESSION_PROPOSAL_TITLE_MAX = 80;
+const SESSION_PROPOSAL_RE = /<session_proposal\s+([^>]*)>([\s\S]*?)<\/session_proposal>/i;
 
 function parseTagAttrs(attrStr) {
   const attrs = {};
@@ -716,11 +749,26 @@ function extractMemoryTags(text) {
   return { cleaned: cleaned.trim(), found };
 }
 
-// Hides complete <memory> tags and any trailing partial tag while a
-// response is still streaming, so raw markup never flashes on screen.
+// Parses and strips a single <session_proposal title="...">purpose</session_proposal>
+// tag from assistant output. When `enabled` is false (feature off, or chat has
+// no profile), the tag is still stripped but no proposal record is returned.
+function extractSessionProposal(text, enabled) {
+  const m = text.match(SESSION_PROPOSAL_RE);
+  if (!m) return { cleaned: text, proposal: null };
+  const cleaned = text.replace(SESSION_PROPOSAL_RE, '').trim();
+  if (!enabled) return { cleaned, proposal: null };
+  const attrs = parseTagAttrs(m[1]);
+  const title = (attrs.title || '').trim().slice(0, SESSION_PROPOSAL_TITLE_MAX);
+  const purpose = m[2].trim().slice(0, MEMORY_CONTENT_MAX);
+  if (!title || !purpose) return { cleaned, proposal: null };
+  return { cleaned, proposal: { title, purpose, status: 'pending', chatId: null } };
+}
+
+// Hides complete <memory>/<session_proposal> tags and any trailing partial
+// tag while a response is still streaming, so raw markup never flashes on screen.
 function stripMemoryTagsForDisplay(text) {
-  let out = text.replace(MEMORY_TAG_RE, '');
-  const partial = out.match(/<memory\b[\s\S]*$/i);
+  let out = text.replace(MEMORY_TAG_RE, '').replace(SESSION_PROPOSAL_RE, '');
+  const partial = out.match(/<(memory|session_proposal)\b[\s\S]*$/i);
   if (partial) out = out.slice(0, partial.index);
   return out;
 }
@@ -782,6 +830,12 @@ Save each item by appending, on its own line at the end of your reply:
 - If the user asks you to remember something, always save it with source="user" and confirm briefly.
 - Never save passwords, keys or other credentials.
 - Calyx processes and hides these tags; do not mention them.`;
+
+const BRANCHING_BLOCK = `
+## Branching topics
+When the user introduces a topic that is distinct from this session's focus and would take the conversation in a different direction, you may propose continuing it in a separate session of this profile. Use moderate judgment: propose when the new topic deserves its own space; skip brief asides and subtopics that serve the current focus. Instructions in the system or profile prompt about when and how to propose take precedence over this default. Briefly explain in your reply, then append on its own line:
+<session_proposal title="Short title">One-sentence purpose.</session_proposal>
+At most one per reply. Calyx shows the user a confirmation card; do not ask for a title or confirmation in text. Do not re-propose a topic the user declined. Later, when relevant, you may remind the user of parked sessions recorded in memories.`;
 
 /* ---------------------------------------------------------------------- */
 /* Utility-model prompts (segment summaries, merges, digests)               */
@@ -1084,7 +1138,8 @@ const DEFAULT_SETTINGS = {
   compactTriggerPct: 70,
   minRawTurns: 20,
   memoryBudgetPct: 30,
-  cornerstoneCategories: ['trait', 'value', 'goal', 'agreement']
+  cornerstoneCategories: ['trait', 'value', 'goal', 'agreement'],
+  branchSessions: true
 };
 
 async function loadSettingsFromDb() {
@@ -1381,8 +1436,8 @@ const ChatListItem = {
 /* Message bubble component                                               */
 /* ---------------------------------------------------------------------- */
 const MessageBubble = {
-  props: { msg: { type: Object, required: true }, memories: { type: Array, default: () => [] } },
-  emits: ['delete-memory'],
+  props: { msg: { type: Object, required: true }, memories: { type: Array, default: () => [] }, chatIds: { type: Array, default: () => [] } },
+  emits: ['delete-memory', 'create-session', 'dismiss-session', 'open-chat'],
   template: document.getElementById('message-bubble-template').innerHTML,
   setup(props) {
     const rendered = computed(() => {
@@ -1394,7 +1449,12 @@ const MessageBubble = {
       if (!ids.length) return [];
       return props.memories.filter(m => ids.includes(m.id));
     });
-    return { rendered, msgMemories };
+    const titleDraft = ref(props.msg.sessionProposal?.title || '');
+    const sessionStillExists = computed(() => {
+      const chatId = props.msg.sessionProposal?.chatId;
+      return !chatId || props.chatIds.includes(chatId);
+    });
+    return { rendered, msgMemories, titleDraft, sessionStillExists };
   },
   mounted() { this.highlightCode(); },
   updated() { this.highlightCode(); },
@@ -1474,6 +1534,7 @@ const app = createApp({
     const profileDeleteAlsoChats = ref(false);
 
     const currentChat = computed(() => chats.value.find(c => c.id === currentChatId.value) || null);
+    const chatIds = computed(() => chats.value.map(c => c.id));
     const chatFilesTokens = computed(() => chatFiles.value.reduce((s, f) => s + f.tokens, 0));
     const chatMemoriesDesc = computed(() => [...chatMemories.value].sort((a, b) => b.createdAt - a.createdAt));
     const streamingDisplay = computed(() => stripMemoryTagsForDisplay(streamingContent.value));
@@ -1579,6 +1640,49 @@ const app = createApp({
       });
       await refreshChats();
       await selectChat(id);
+    }
+
+    /* ---- Session branching (model-proposed new session) ---- */
+    function updateMessageProposal(msgId, patch) {
+      const idx = messages.value.findIndex(m => m.id === msgId);
+      if (idx !== -1) messages.value[idx] = { ...messages.value[idx], sessionProposal: { ...messages.value[idx].sessionProposal, ...patch } };
+    }
+
+    async function createBranchSession(msg, title) {
+      if (!msg.sessionProposal || msg.sessionProposal.status !== 'pending') return;
+      const proposal = msg.sessionProposal;
+      const finalTitle = (title || proposal.title || '').trim().slice(0, 80) || 'New Session';
+      const now = Date.now();
+      const newChatId = crypto.randomUUID();
+      try {
+        await db.transaction('rw', db.chats, db.memories, db.messages, async () => {
+          const originChat = await db.chats.get(msg.chatId);
+          if (!originChat || !originChat.profileId) throw new Error('Origin chat is no longer in a profile');
+          await db.chats.add({ id: newChatId, title: finalTitle, createdAt: now, updatedAt: now, isPinned: false, profileId: originChat.profileId });
+          await db.memories.add({
+            id: crypto.randomUUID(), chatId: originChat.id, category: 'decision',
+            content: `Decided on ${fmtDateShort(now)} to explore "${finalTitle}" in a separate session: ${proposal.purpose}`,
+            when: null, source: 'user', pinned: false, sourceMessageId: msg.id, createdAt: now, updatedAt: now
+          });
+          await db.memories.add({
+            id: crypto.randomUUID(), chatId: newChatId, category: 'goal',
+            content: `Session opened from session "${originChat.title}" on ${fmtDateShort(now)} to explore: ${proposal.purpose}`,
+            when: null, source: 'user', pinned: false, sourceMessageId: null, createdAt: now, updatedAt: now
+          });
+          await db.messages.update(msg.id, { sessionProposal: { ...proposal, title: finalTitle, status: 'created', chatId: newChatId } });
+        });
+        updateMessageProposal(msg.id, { title: finalTitle, status: 'created', chatId: newChatId });
+        await refreshChats();
+        if (currentChatId.value === msg.chatId) await refreshChatMemories();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function dismissSessionProposal(msg) {
+      if (!msg.sessionProposal || msg.sessionProposal.status !== 'pending') return;
+      await db.messages.update(msg.id, { sessionProposal: { ...msg.sessionProposal, status: 'dismissed' } });
+      updateMessageProposal(msg.id, { status: 'dismissed' });
     }
 
     async function selectChat(id) {
@@ -1913,13 +2017,15 @@ const app = createApp({
         content: m.role === 'user' ? `[${fmtDateTime(m.createdAt)}] ${m.content}` : m.content
       }));
 
+      const branchingEnabled = !!(profile && settings.branchSessions);
+
       return {
-        protocol: PROTOCOL_BLOCK,
+        protocol: branchingEnabled ? `${PROTOCOL_BLOCK}\n${BRANCHING_BLOCK}` : PROTOCOL_BLOCK,
         mainPrompt: settings.systemPrompt || '',
         personaPrompt: profile?.systemPrompt || '',
         docsBlock, otherDigestsBlock, profileMemoriesBlock, recalledBlock,
         summaryBlock, sessionMemoriesBlock, calyxContext,
-        historyMsgs, overCapWarned
+        historyMsgs, overCapWarned, branchingEnabled
       };
     }
 
@@ -2103,8 +2209,9 @@ const app = createApp({
           streamingContent.value += `\n\n⚠️ Response truncated (${reason})`;
         }
 
-        // Parse & persist inline <memory> tags, then persist the cleaned assistant message
-        const { cleaned, found } = extractMemoryTags(streamingContent.value);
+        // Parse & persist inline <memory> tags, then a <session_proposal> tag, then persist the cleaned assistant message
+        const { cleaned: afterMemory, found } = extractMemoryTags(streamingContent.value);
+        const { cleaned, proposal } = extractSessionProposal(afterMemory, ctx.branchingEnabled);
         const asstNow = Date.now();
         const asstMsgId = crypto.randomUUID();
         let memoryIds = [];
@@ -2126,7 +2233,8 @@ const app = createApp({
           createdAt: asstNow,
           updatedAt: asstNow,
           attachments: [],
-          memoryIds
+          memoryIds,
+          sessionProposal: proposal
         };
         await db.messages.add(asstMsg);
         messages.value.push(asstMsg);
@@ -2206,7 +2314,7 @@ const app = createApp({
 
     return {
       settings, showSettings, searchQuery, toasts, memoryCategories,
-      chats, profiles, currentChatId, currentChat, messages,
+      chats, chatIds, profiles, currentChatId, currentChat, messages,
       groupedChats, currentSessionInfo,
       chatMemories, chatMemoriesDesc, currentSegments, showSegmentsViewer, compacting,
       streaming, streamingContent, streamingDisplay, inputText, attachments,
@@ -2218,6 +2326,7 @@ const app = createApp({
       showImportModal, importMode, importFileInput,
       saveSetting, toggleTheme,
       createChat, selectChat, renameChat, togglePin, deleteChat,
+      createBranchSession, dismissSessionProposal,
       startEditTitle, commitTitle, exportData,
       openProfileEditor, saveProfile, deleteProfileConfirm, setChatProfile, refreshProfileDigests,
       toggleMemoryPanel, addManualMemory, startEditMemory, commitMemoryEdit, toggleMemoryPin, deleteMemory,

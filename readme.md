@@ -168,6 +168,7 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
 * **Session Digests:** Each chat maintains a short, incrementally-updated digest injected (instead of full memories) when referencing other sessions in a profile, refreshed on chat switch, lazily before sending, or via a per-profile "Refresh digests" action.
 * **Segmented Rolling Compaction:** Older turns beyond a configurable raw-turn window are summarized into frozen "segments" (never re-summarized individually); only the oldest segments are merged further when the segment budget is exceeded. Original messages are never deleted. Auto-triggers at a configurable % of the context budget, or on demand via "Compact now".
 * **Memory Review Panel:** Per-chat panel to view, pin, edit, delete, and manually add memories, plus a read-only view of the live profile memory pool with out-of-context items greyed out.
+* **Model-Proposed Session Branching:** When a profile chat's topic drifts, the model can propose continuing it in a new session of the same profile; Calyx shows a confirmation card (editable title, Create/Dismiss) rather than creating anything automatically. The current chat stays open — the new session is linked back via a memory in each chat, with no manual setup required.
 
 ---
 
