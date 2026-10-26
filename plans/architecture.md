@@ -46,7 +46,7 @@ A unified class/functions to handle API communication, supporting **streaming** 
 *   *Future Proofing:* The architecture should allow querying the API to fetch available models dynamically in the future.
 
 ## 4. Multi-modal Processing Pipeline
-*   **Images:** Read via `FileReader` to base64. Rendered as thumbnails. *(Known gap: base64 data is not persisted with the message and is not currently sent to model APIs.)*
+*   **Images:** Read via `FileReader` to base64. Rendered as a name chip in the attachment tray (icon + filename only — visual thumbnails are a planned Phase 2 item, see `readme.md` §3). *(Known gap: base64 data is not persisted with the message and is not currently sent to model APIs.)*
 *   **Documents (TXT/MD/PDF):** Extracted via `FileReader`/`pdf.js`, normalized (CRLF→LF, trailing-space strip, blank-line collapse), hashed (SHA-256) for chat-scoped deduplication, and stored in the `files` table — decoupled from any single message.
 *   **Context Assembly:** On each turn, all chat `files` are rendered into a single `<documents><document index="n" name="...">…</document></documents>` block and injected into the system/instruction area (after the system prompt, documents last) rather than inlined into message `content`:
     *   **Anthropic:** `system` is sent as a block array; the documents block carries `cache_control: { type: "ephemeral" }` for prompt caching.
