@@ -21,7 +21,8 @@
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<link id="hljs-theme-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" disabled>
+<link id="hljs-theme-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 
 <!-- Icons -->
 <script src="https://cdn.jsdelivr.net/npm/lucide@0.462.0/dist/umd/lucide.js"></script>
@@ -120,10 +121,10 @@
           <icon name="Folder" :size="12" class="shrink-0 text-slate-400"></icon>
           <span class="flex-1 min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-400">{{ group.name }}</span>
           <template v-if="group.profile">
-            <button @click="refreshProfileDigests(group.profile)" class="hidden group-hover/profile:block p-0.5 text-slate-400 hover:text-indigo-500" title="Refresh digests">
+            <button @click="refreshProfileDigests(group.profile)" class="invisible group-hover/profile:visible p-0.5 text-slate-400 hover:text-indigo-500" title="Refresh digests">
               <icon name="RefreshCw" :size="12"></icon>
             </button>
-            <button @click="openProfileEditor(group.profile)" class="hidden group-hover/profile:block p-0.5 text-slate-400 hover:text-indigo-500" title="Edit profile">
+            <button @click="openProfileEditor(group.profile)" class="invisible group-hover/profile:visible p-0.5 text-slate-400 hover:text-indigo-500" title="Edit profile">
               <icon name="Pencil" :size="12"></icon>
             </button>
           </template>
@@ -662,7 +663,7 @@
       :class="active ? 'border-white' : 'border-indigo-500'">
     <span v-else class="flex-1 min-w-0 truncate" @dblclick.stop="startEdit">{{ chat.title }}</span>
 
-    <div class="hidden group-hover:flex items-center gap-0.5 shrink-0" @click.stop>
+    <div class="invisible group-hover:visible flex items-center gap-0.5 shrink-0" @click.stop>
       <button @click="$emit('toggle-pin', chat)" class="p-1 rounded hover:bg-black/10" :title="chat.isPinned ? 'Unpin' : 'Pin'">
         <icon name="Pin" :size="13" :class="chat.isPinned ? 'opacity-100' : 'opacity-50'"></icon>
       </button>
@@ -1584,7 +1585,10 @@ const app = createApp({
 
     /* ---- Theme ---- */
     function applyTheme() {
-      document.documentElement.classList.toggle('dark', settings.theme === 'dark');
+      const isDark = settings.theme === 'dark';
+      document.documentElement.classList.toggle('dark', isDark);
+      document.getElementById('hljs-theme-dark').disabled = !isDark;
+      document.getElementById('hljs-theme-light').disabled = isDark;
     }
 
     async function saveSetting(key, value) {
