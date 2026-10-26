@@ -2,13 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Calyx — AI Chat</title>
 
 <!-- Tailwind CSS (Runtime) -->
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 <style type="text/tailwindcss">
   @custom-variant dark (&:where(.dark, .dark *));
+  @custom-variant pointer-coarse {
+    @media (pointer: coarse) {
+      @slot;
+    }
+  }
+  @utility tap-target {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
 </style>
 
 <!-- Vue 3 (Global build, includes template compiler) -->
@@ -39,6 +51,11 @@
   ::-webkit-scrollbar-thumb:hover { background: rgba(120,120,120,.6); }
 
   textarea.autosize { resize: none; overflow-y: auto; max-height: 240px; }
+
+  /* Prevent iOS Safari auto-zoom on focus for touch devices only; desktop sizing untouched */
+  @media (pointer: coarse) {
+    input, select, textarea { font-size: max(16px, 1em); }
+  }
 
   /* Markdown prose styles for assistant messages */
   .prose-message { line-height: 1.65; }
@@ -88,10 +105,12 @@
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 antialiased">
 
-<div id="app" v-cloak class="flex h-screen w-screen overflow-hidden">
+<div id="app" v-cloak class="flex h-dvh w-screen overflow-hidden">
 
   <!-- ============ SIDEBAR ============ -->
-  <aside class="flex flex-col w-72 shrink-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800">
+  <div v-if="sidebarOpen" class="lg:hidden fixed inset-0 z-30 bg-black/50" @click="sidebarOpen = false"></div>
+  <aside class="flex flex-col w-72 max-lg:w-[85vw] max-lg:max-w-sm shrink-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-40 max-lg:transition-transform max-lg:duration-200 max-lg:motion-reduce:transition-none max-lg:pt-[env(safe-area-inset-top)] max-lg:pb-[env(safe-area-inset-bottom)]"
+    :class="sidebarOpen ? '' : 'max-lg:-translate-x-full max-lg:invisible'">
 
     <div class="p-3 flex flex-col gap-2">
       <button @click="createChat"
@@ -111,7 +130,7 @@
 
       <div class="flex items-center justify-between px-2 pt-1 pb-1">
         <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Profiles</span>
-        <button @click="openProfileEditor(null)" class="p-0.5 text-slate-400 hover:text-indigo-500" title="New profile">
+        <button @click="openProfileEditor(null)" class="p-0.5 text-slate-400 hover:text-indigo-500 pointer-coarse:tap-target" title="New profile">
           <icon name="Plus" :size="14"></icon>
         </button>
       </div>
@@ -121,10 +140,10 @@
           <icon name="Folder" :size="12" class="shrink-0 text-slate-400"></icon>
           <span class="flex-1 min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-400">{{ group.name }}</span>
           <template v-if="group.profile">
-            <button @click="refreshProfileDigests(group.profile)" class="invisible group-hover/profile:visible p-0.5 text-slate-400 hover:text-indigo-500" title="Refresh digests">
+            <button @click="refreshProfileDigests(group.profile)" class="invisible group-hover/profile:visible pointer-coarse:visible pointer-coarse:tap-target p-0.5 text-slate-400 hover:text-indigo-500" title="Refresh digests">
               <icon name="RefreshCw" :size="12"></icon>
             </button>
-            <button @click="openProfileEditor(group.profile)" class="invisible group-hover/profile:visible p-0.5 text-slate-400 hover:text-indigo-500" title="Edit profile">
+            <button @click="openProfileEditor(group.profile)" class="invisible group-hover/profile:visible pointer-coarse:visible pointer-coarse:tap-target p-0.5 text-slate-400 hover:text-indigo-500" title="Edit profile">
               <icon name="Pencil" :size="12"></icon>
             </button>
           </template>
@@ -163,7 +182,11 @@
   <main class="flex-1 flex flex-col min-w-0">
 
     <!-- Header -->
-    <header class="h-14 shrink-0 flex items-center gap-2 px-4 border-b border-slate-200 dark:border-slate-800">
+    <header class="min-h-14 shrink-0 flex items-center gap-2 px-4 pt-[env(safe-area-inset-top)] border-b border-slate-200 dark:border-slate-800">
+      <button @click="sidebarOpen = true" class="lg:hidden shrink-0 p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 pointer-coarse:tap-target"
+        aria-label="Open sidebar" :aria-expanded="sidebarOpen">
+        <icon name="Menu" :size="20"></icon>
+      </button>
       <template v-if="currentChat">
         <input v-if="editingTitle" v-model.trim="titleDraft" @keyup.enter="commitTitle" @keyup.escape="editingTitle = false"
           @blur="commitTitle" ref="titleInput"
@@ -177,20 +200,20 @@
           </span>
         </div>
         <select :value="currentChat.profileId || ''" @change="setChatProfile(currentChat, $event.target.value || null)"
-          class="shrink-0 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 max-w-[140px]" title="Profile">
+          class="shrink-0 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1 max-w-[96px] sm:max-w-[140px]" title="Profile">
           <option value="">No profile</option>
           <option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
         <button @click="compactNow" :disabled="compacting" title="Compact now"
-          class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 disabled:opacity-40">
+          class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 disabled:opacity-40 pointer-coarse:tap-target">
           <icon name="Scissors" :size="16"></icon>
         </button>
         <button @click="toggleMemoryPanel" title="Memories"
-          class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800"
+          class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 pointer-coarse:tap-target"
           :class="showMemoryPanel ? 'text-indigo-500' : 'text-slate-400'">
           <icon name="Brain" :size="18"></icon>
         </button>
-        <button @click="togglePin(currentChat)" class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800"
+        <button @click="togglePin(currentChat)" class="max-sm:hidden p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 pointer-coarse:tap-target"
           :class="currentChat.isPinned ? 'text-indigo-500' : 'text-slate-400'" title="Pin chat">
           <icon name="Pin" :size="18"></icon>
         </button>
@@ -199,7 +222,7 @@
         <h1 class="flex-1 text-base font-medium text-slate-400">Select or start a chat</h1>
       </template>
 
-      <button @click="toggleTheme" class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400" title="Toggle theme">
+      <button @click="toggleTheme" class="max-sm:hidden p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 pointer-coarse:tap-target" title="Toggle theme">
         <icon :name="settings.theme === 'dark' ? 'Sun' : 'Moon'" :size="18"></icon>
       </button>
     </header>
@@ -253,7 +276,7 @@
 
         <!-- Streaming assistant bubble -->
         <div v-if="streaming" class="flex justify-start">
-          <div class="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800">
+          <div class="max-w-[90%] sm:max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800">
             <div v-if="streamingDisplay" class="prose-message" v-html="renderMarkdown(streamingDisplay)"></div>
             <span v-else class="flex gap-1 items-center text-slate-400">
               <span class="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:0ms"></span>
@@ -280,11 +303,11 @@
     </div>
 
     <!-- Input area -->
-    <div class="shrink-0 border-t border-slate-200 dark:border-slate-800 p-4">
+    <div class="shrink-0 border-t border-slate-200 dark:border-slate-800 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
       <div class="max-w-3xl mx-auto rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 focus-within:border-indigo-400 dark:focus-within:border-indigo-500 transition-colors">
         <div class="flex items-center gap-1.5 px-2.5 py-2.5">
           <button @click="triggerFileInput" :disabled="streaming" title="Attach file"
-            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors pointer-coarse:tap-target">
             <icon name="Paperclip" :size="17"></icon>
           </button>
           <textarea ref="inputArea" v-model="inputText" rows="1"
@@ -292,9 +315,9 @@
             :disabled="!currentChat || streaming"
             @keydown.enter.exact.prevent="sendMessage"
             @input="autoResizeInput"
-            class="autosize flex-1 bg-transparent focus:outline-none text-sm leading-6 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
+            class="autosize flex-1 bg-transparent focus:outline-none text-sm pointer-coarse:text-base leading-6 placeholder:text-slate-400 disabled:cursor-not-allowed"></textarea>
           <button @click="sendMessage" :disabled="!currentChat || streaming || (!inputText.trim() && !attachments.length && !pendingDocIds.length)"
-            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 active:bg-indigo-700 transition-colors">
+            class="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-indigo-500 active:bg-indigo-700 transition-colors pointer-coarse:tap-target">
             <icon name="Send" :size="17"></icon>
           </button>
         </div>
@@ -304,10 +327,11 @@
   </main>
 
   <!-- ============ MEMORY PANEL ============ -->
-  <aside v-if="showMemoryPanel && currentChat" class="flex flex-col w-80 shrink-0 bg-slate-50 dark:bg-slate-950 border-l border-slate-200 dark:border-slate-800">
+  <div v-if="showMemoryPanel && currentChat" class="xl:hidden fixed inset-0 z-30 bg-black/50" @click="showMemoryPanel = false"></div>
+  <aside v-if="showMemoryPanel && currentChat" class="flex flex-col w-80 shrink-0 bg-slate-50 dark:bg-slate-950 border-l border-slate-200 dark:border-slate-800 max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-40 max-xl:w-full max-xl:max-w-sm max-xl:shadow-xl max-xl:pt-[env(safe-area-inset-top)] max-xl:pb-[env(safe-area-inset-bottom)]">
     <div class="h-14 shrink-0 flex items-center justify-between px-4 border-b border-slate-200 dark:border-slate-800">
       <h2 class="text-sm font-semibold">Memories</h2>
-      <button @click="showMemoryPanel = false" class="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800">
+      <button @click="showMemoryPanel = false" aria-label="Close memories" class="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 pointer-coarse:tap-target">
         <icon name="X" :size="16"></icon>
       </button>
     </div>
@@ -325,13 +349,13 @@
           <span v-if="m.when" class="text-[10px] text-slate-400">· {{ m.when }}</span>
           <span v-if="m.excluded" class="text-[10px] text-amber-500">out of context</span>
           <span class="text-[10px] text-slate-400 ml-auto">{{ fmtLocal(m.createdAt) }}</span>
-          <button v-if="memoryTab === 'session'" @click="toggleMemoryPin(m)" class="p-0.5" :class="m.pinned ? 'text-indigo-500' : 'text-slate-400 hover:text-indigo-500'" title="Pin">
+          <button v-if="memoryTab === 'session'" @click="toggleMemoryPin(m)" class="p-0.5 pointer-coarse:tap-target" :class="m.pinned ? 'text-indigo-500' : 'text-slate-400 hover:text-indigo-500'" title="Pin">
             <icon name="Pin" :size="11"></icon>
           </button>
-          <button v-if="memoryTab === 'session'" @click="startEditMemory(m)" class="p-0.5 text-slate-400 hover:text-indigo-500" title="Edit">
+          <button v-if="memoryTab === 'session'" @click="startEditMemory(m)" class="p-0.5 text-slate-400 hover:text-indigo-500 pointer-coarse:tap-target" title="Edit">
             <icon name="Pencil" :size="11"></icon>
           </button>
-          <button v-if="memoryTab === 'session'" @click="deleteMemory(m)" class="p-0.5 text-slate-400 hover:text-red-500" title="Delete">
+          <button v-if="memoryTab === 'session'" @click="deleteMemory(m)" class="p-0.5 text-slate-400 hover:text-red-500 pointer-coarse:tap-target" title="Delete">
             <icon name="Trash2" :size="11"></icon>
           </button>
         </div>
@@ -357,7 +381,7 @@
       <div class="flex gap-1.5">
         <input v-model="newMemoryContent" @keyup.enter="addManualMemory" placeholder="Add a memory..."
           class="flex-1 min-w-0 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1">
-        <button @click="addManualMemory" class="shrink-0 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white">
+        <button @click="addManualMemory" class="shrink-0 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white pointer-coarse:tap-target">
           <icon name="Plus" :size="14"></icon>
         </button>
       </div>
@@ -421,7 +445,7 @@
   </div>
 
   <!-- ============ TOASTS ============ -->
-  <div class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+  <div class="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 max-lg:left-4 z-50 flex flex-col gap-2 pointer-events-none">
     <div v-for="t in toasts" :key="t.id"
       class="pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium shadow-lg transition-all"
       :class="t.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900'">
@@ -435,164 +459,183 @@
 <!-- ============ COMPONENT TEMPLATES ============ -->
 
 <script type="text/x-template" id="settings-modal-template">
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="$emit('close')">
-    <div class="w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 shadow-xl">
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 lg:p-4" @click.self="$emit('close')">
+    <div class="w-full h-dvh lg:h-[min(85vh,760px)] lg:max-w-4xl lg:rounded-2xl bg-white dark:bg-slate-900 shadow-xl flex flex-col overflow-hidden">
 
-      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+      <!-- Header -->
+      <div class="shrink-0 flex items-center justify-between px-5 py-4 pt-[max(1rem,env(safe-area-inset-top))] lg:pt-4 border-b border-slate-200 dark:border-slate-800">
         <h2 class="text-base font-semibold">Settings</h2>
-        <button @click="$emit('close')" class="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800">
+        <button @click="$emit('close')" aria-label="Close settings" class="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 pointer-coarse:tap-target">
           <icon name="X" :size="18"></icon>
         </button>
       </div>
 
-      <div class="p-5 flex flex-col gap-5 text-sm">
+      <div class="flex-1 min-h-0 flex flex-col lg:flex-row">
 
-        <!-- Theme -->
-        <div>
-          <label class="block font-medium mb-1">Theme</label>
-          <select :value="settings.theme" @change="$emit('update', 'theme', $event.target.value)"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
+        <!-- Section nav: horizontal tabs on mobile/tablet, vertical rail on desktop -->
+        <nav class="shrink-0 flex lg:flex-col gap-1 overflow-x-auto lg:overflow-x-visible lg:w-52 px-3 lg:px-3 py-2 lg:py-4 border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800">
+          <button v-for="s in sections" :key="s.id" @click="section = s.id"
+            class="shrink-0 text-left text-sm px-3 py-2 rounded-lg whitespace-nowrap pointer-coarse:tap-target"
+            :class="section === s.id ? 'bg-indigo-600 text-white' : 'hover:bg-slate-200 dark:hover:bg-slate-800'">
+            {{ s.label }}
+          </button>
+        </nav>
 
-        <!-- Default provider / model -->
-        <div>
-          <label class="block font-medium mb-1">Default Provider</label>
-          <select :value="settings.selectedProvider" @change="$emit('update', 'selectedProvider', $event.target.value)"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 mb-2">
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini</option>
-          </select>
-          <label class="block font-medium mb-1">Default Model</label>
-          <input type="text" :value="settings.selectedModel" @change="$emit('update', 'selectedModel', $event.target.value)"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
-            placeholder="e.g. gpt-5.6-terra">
-          <p class="text-xs text-slate-400 mt-1">Model list querying from the provider API is coming in a future update.</p>
-        </div>
+        <!-- Content -->
+        <div class="flex-1 min-w-0 overflow-y-auto p-5 flex flex-col gap-5 text-sm">
 
-        <!-- API Keys -->
-        <div class="flex flex-col gap-2">
-          <label class="block font-medium">API Keys</label>
-          <input type="password" :value="settings.openaiApiKey" @change="$emit('update', 'openaiApiKey', $event.target.value)"
-            placeholder="OpenAI API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          <input type="password" :value="settings.anthropicApiKey" @change="$emit('update', 'anthropicApiKey', $event.target.value)"
-            placeholder="Anthropic API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          <input type="password" :value="settings.geminiApiKey" @change="$emit('update', 'geminiApiKey', $event.target.value)"
-            placeholder="Gemini API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-        </div>
-
-        <!-- Global system prompt -->
-        <div>
-          <label class="block font-medium mb-1">Global System Prompt</label>
-          <textarea :value="settings.systemPrompt" @change="$emit('update', 'systemPrompt', $event.target.value)" rows="3"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
-            placeholder="Applied to every chat, after the built-in memory protocol and before the active profile's persona prompt."></textarea>
-        </div>
-
-        <!-- Memory & Context -->
-        <div class="border-t border-slate-200 dark:border-slate-800 pt-4 flex flex-col gap-3">
-          <label class="block font-medium">Memory &amp; Context</label>
-
-          <div class="grid grid-cols-2 gap-3">
+          <template v-if="section === 'general'">
+            <!-- Theme -->
             <div>
-              <label class="block text-xs font-medium mb-1">Utility Provider</label>
-              <select :value="settings.utilityProvider || ''" @change="$emit('update', 'utilityProvider', $event.target.value || null)"
+              <label class="block font-medium mb-1">Theme</label>
+              <select :value="settings.theme" @change="$emit('update', 'theme', $event.target.value)"
                 class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-                <option value="">Same as chat</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+
+            <!-- Global system prompt -->
+            <div>
+              <label class="block font-medium mb-1">Global System Prompt</label>
+              <textarea :value="settings.systemPrompt" @change="$emit('update', 'systemPrompt', $event.target.value)" rows="4"
+                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                placeholder="Applied to every chat, after the built-in memory protocol and before the active profile's persona prompt."></textarea>
+            </div>
+          </template>
+
+          <template v-if="section === 'providers'">
+            <!-- Default provider / model -->
+            <div>
+              <label class="block font-medium mb-1">Default Provider</label>
+              <select :value="settings.selectedProvider" @change="$emit('update', 'selectedProvider', $event.target.value)"
+                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5 mb-2">
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="gemini">Gemini</option>
               </select>
+              <label class="block font-medium mb-1">Default Model</label>
+              <input type="text" :value="settings.selectedModel" @change="$emit('update', 'selectedModel', $event.target.value)"
+                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+                placeholder="e.g. gpt-5.6-terra">
+              <p class="text-xs text-slate-400 mt-1">Model list querying from the provider API is coming in a future update.</p>
             </div>
-            <div>
-              <label class="block text-xs font-medium mb-1">Utility Model</label>
-              <input type="text" :value="settings.utilityModel || ''" @change="$emit('update', 'utilityModel', $event.target.value || null)"
-                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5" placeholder="Same as chat">
-            </div>
-          </div>
-          <p class="text-xs text-slate-400 -mt-1">Model used for segment summaries and session digests.</p>
 
-          <div class="grid grid-cols-3 gap-3">
+            <!-- API Keys -->
+            <div class="flex flex-col gap-2">
+              <label class="block font-medium">API Keys</label>
+              <input type="password" :value="settings.openaiApiKey" @change="$emit('update', 'openaiApiKey', $event.target.value)"
+                placeholder="OpenAI API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <input type="password" :value="settings.anthropicApiKey" @change="$emit('update', 'anthropicApiKey', $event.target.value)"
+                placeholder="Anthropic API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <input type="password" :value="settings.geminiApiKey" @change="$emit('update', 'geminiApiKey', $event.target.value)"
+                placeholder="Gemini API key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+            </div>
+          </template>
+
+          <template v-if="section === 'memory'">
+            <!-- Memory & Context -->
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium mb-1">Utility Provider</label>
+                <select :value="settings.utilityProvider || ''" @change="$emit('update', 'utilityProvider', $event.target.value || null)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                  <option value="">Same as chat</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Gemini</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium mb-1">Utility Model</label>
+                <input type="text" :value="settings.utilityModel || ''" @change="$emit('update', 'utilityModel', $event.target.value || null)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5" placeholder="Same as chat">
+              </div>
+            </div>
+            <p class="text-xs text-slate-400 -mt-2">Model used for segment summaries and session digests.</p>
+
+            <div class="grid sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-xs font-medium mb-1">Context Budget (tokens)</label>
+                <input type="number" min="10000" step="10000" :value="settings.contextBudget"
+                  @change="$emit('update', 'contextBudget', +$event.target.value)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              </div>
+              <div>
+                <label class="block text-xs font-medium mb-1">Compact Trigger %</label>
+                <input type="number" min="10" max="100" :value="settings.compactTriggerPct"
+                  @change="$emit('update', 'compactTriggerPct', +$event.target.value)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              </div>
+              <div>
+                <label class="block text-xs font-medium mb-1">Min Raw Turns</label>
+                <input type="number" min="2" :value="settings.minRawTurns"
+                  @change="$emit('update', 'minRawTurns', +$event.target.value)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              </div>
+            </div>
+
             <div>
-              <label class="block text-xs font-medium mb-1">Context Budget (tokens)</label>
-              <input type="number" min="10000" step="10000" :value="settings.contextBudget"
-                @change="$emit('update', 'contextBudget', +$event.target.value)"
+              <label class="block text-xs font-medium mb-1">Memory Budget % of Context Budget</label>
+              <input type="number" min="5" max="90" :value="settings.memoryBudgetPct"
+                @change="$emit('update', 'memoryBudgetPct', +$event.target.value)"
                 class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
             </div>
+
             <div>
-              <label class="block text-xs font-medium mb-1">Compact Trigger %</label>
-              <input type="number" min="10" max="100" :value="settings.compactTriggerPct"
-                @change="$emit('update', 'compactTriggerPct', +$event.target.value)"
-                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <label class="block text-xs font-medium mb-1">Cornerstone Categories (always included)</label>
+              <div class="flex flex-wrap gap-2">
+                <label v-for="c in memoryCategories" :key="c" class="flex items-center gap-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-1 cursor-pointer">
+                  <input type="checkbox" :checked="(settings.cornerstoneCategories || []).includes(c)" @change="toggleCornerstone(c)">
+                  {{ c }}
+                </label>
+              </div>
             </div>
+
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" :checked="settings.branchSessions" @change="$emit('update', 'branchSessions', $event.target.checked)">
+              Allow AI to propose new sessions for drifting topics (profile chats only)
+            </label>
+          </template>
+
+          <template v-if="section === 'documents'">
+            <!-- PDF limits -->
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block font-medium mb-1">PDF Page Limit</label>
+                <input type="number" min="1" :value="settings.pdfPageLimit" @change="$emit('update', 'pdfPageLimit', +$event.target.value)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              </div>
+              <div>
+                <label class="block font-medium mb-1">PDF Size Limit (MB)</label>
+                <input type="number" min="1" :value="settings.pdfSizeLimitMB" @change="$emit('update', 'pdfSizeLimitMB', +$event.target.value)"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              </div>
+            </div>
+
+            <!-- Document token warning -->
             <div>
-              <label class="block text-xs font-medium mb-1">Min Raw Turns</label>
-              <input type="number" min="2" :value="settings.minRawTurns"
-                @change="$emit('update', 'minRawTurns', +$event.target.value)"
+              <label class="block font-medium mb-1">Document Token Warning</label>
+              <input type="number" min="1000" :value="settings.docTokenWarn" @change="$emit('update', 'docTokenWarn', +$event.target.value)"
                 class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <p class="text-xs text-slate-400 mt-1">Warn when a chat's attached document text exceeds this estimated token count.</p>
             </div>
-          </div>
 
-          <div>
-            <label class="block text-xs font-medium mb-1">Memory Budget % of Context Budget</label>
-            <input type="number" min="5" max="90" :value="settings.memoryBudgetPct"
-              @change="$emit('update', 'memoryBudgetPct', +$event.target.value)"
-              class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          </div>
-
-          <div>
-            <label class="block text-xs font-medium mb-1">Cornerstone Categories (always included)</label>
-            <div class="flex flex-wrap gap-2">
-              <label v-for="c in memoryCategories" :key="c" class="flex items-center gap-1 text-xs rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-1 cursor-pointer">
-                <input type="checkbox" :checked="(settings.cornerstoneCategories || []).includes(c)" @change="toggleCornerstone(c)">
-                {{ c }}
-              </label>
+            <!-- Max output tokens -->
+            <div>
+              <label class="block font-medium mb-1">Max Output Tokens</label>
+              <input type="number" min="1" :value="settings.maxOutputTokens"
+                @change="$emit('update', 'maxOutputTokens', $event.target.value ? +$event.target.value : null)"
+                class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <p class="text-xs text-slate-400 mt-1">Max tokens the model may generate per reply. Leave empty for default (32000). Values above the model's limit cause an error.</p>
             </div>
-          </div>
+          </template>
 
-          <label class="flex items-center gap-2 text-xs cursor-pointer">
-            <input type="checkbox" :checked="settings.branchSessions" @change="$emit('update', 'branchSessions', $event.target.checked)">
-            Allow AI to propose new sessions for drifting topics (profile chats only)
-          </label>
-        </div>
-
-        <!-- PDF limits -->
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block font-medium mb-1">PDF Page Limit</label>
-            <input type="number" min="1" :value="settings.pdfPageLimit" @change="$emit('update', 'pdfPageLimit', +$event.target.value)"
-              class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          </div>
-          <div>
-            <label class="block font-medium mb-1">PDF Size Limit (MB)</label>
-            <input type="number" min="1" :value="settings.pdfSizeLimitMB" @change="$emit('update', 'pdfSizeLimitMB', +$event.target.value)"
-              class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          </div>
-        </div>
-
-        <!-- Document token warning -->
-        <div>
-          <label class="block font-medium mb-1">Document Token Warning</label>
-          <input type="number" min="1000" :value="settings.docTokenWarn" @change="$emit('update', 'docTokenWarn', +$event.target.value)"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          <p class="text-xs text-slate-400 mt-1">Warn when a chat's attached document text exceeds this estimated token count.</p>
-        </div>
-
-        <!-- Max output tokens -->
-        <div>
-          <label class="block font-medium mb-1">Max Output Tokens</label>
-          <input type="number" min="1" :value="settings.maxOutputTokens"
-            @change="$emit('update', 'maxOutputTokens', $event.target.value ? +$event.target.value : null)"
-            class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
-          <p class="text-xs text-slate-400 mt-1">Max tokens the model may generate per reply. Leave empty for default (32000). Values above the model's limit cause an error.</p>
         </div>
       </div>
 
-      <div class="px-5 py-4 border-t border-slate-200 dark:border-slate-800 flex justify-end">
-        <button @click="$emit('close')" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-1.5">Done</button>
+      <div class="shrink-0 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:pb-4 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+        <button @click="$emit('close')" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-1.5 pointer-coarse:tap-target">Done</button>
       </div>
     </div>
   </div>
@@ -601,7 +644,7 @@
 <script type="text/x-template" id="message-bubble-template">
   <div class="flex" :class="msg.role === 'user' ? 'justify-end' : 'justify-start'">
     <div v-if="msg.role === 'user'"
-      class="max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm bg-indigo-600 text-white break-words whitespace-pre-wrap">
+      class="max-w-[90%] sm:max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm bg-indigo-600 text-white break-words whitespace-pre-wrap">
       <div v-if="msg.attachments && msg.attachments.length" class="flex flex-wrap gap-1.5 mb-2">
         <span v-for="(att, i) in msg.attachments" :key="i"
           class="flex items-center gap-1 rounded-md bg-indigo-500/60 px-2 py-0.5 text-xs">
@@ -611,7 +654,7 @@
       </div>
       {{ msg.content }}
     </div>
-    <div v-else class="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800 prose-message">
+    <div v-else class="max-w-[90%] sm:max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm bg-slate-200 dark:bg-slate-800 prose-message">
       <div v-html="rendered"></div>
       <div v-if="msgMemories.length" class="flex flex-wrap gap-1 mt-2 pt-2 border-t border-slate-300/50 dark:border-slate-700/50 not-prose">
         <span v-for="m in msgMemories" :key="m.id"
@@ -663,14 +706,14 @@
       :class="active ? 'border-white' : 'border-indigo-500'">
     <span v-else class="flex-1 min-w-0 truncate" @dblclick.stop="startEdit">{{ chat.title }}</span>
 
-    <div class="invisible group-hover:visible flex items-center gap-0.5 shrink-0" @click.stop>
-      <button @click="$emit('toggle-pin', chat)" class="p-1 rounded hover:bg-black/10" :title="chat.isPinned ? 'Unpin' : 'Pin'">
+    <div class="invisible group-hover:visible pointer-coarse:visible flex items-center gap-0.5 shrink-0" @click.stop>
+      <button @click="$emit('toggle-pin', chat)" class="p-1 rounded hover:bg-black/10 pointer-coarse:tap-target" :title="chat.isPinned ? 'Unpin' : 'Pin'">
         <icon name="Pin" :size="13" :class="chat.isPinned ? 'opacity-100' : 'opacity-50'"></icon>
       </button>
-      <button @click="startEdit" class="p-1 rounded hover:bg-black/10" title="Rename">
+      <button @click="startEdit" class="p-1 rounded hover:bg-black/10 pointer-coarse:tap-target" title="Rename">
         <icon name="Pencil" :size="13" class="opacity-70"></icon>
       </button>
-      <button @click="$emit('delete', chat)" class="p-1 rounded hover:bg-black/10" title="Delete">
+      <button @click="$emit('delete', chat)" class="p-1 rounded hover:bg-black/10 pointer-coarse:tap-target" title="Delete">
         <icon name="Trash2" :size="13" class="opacity-70"></icon>
       </button>
     </div>
@@ -1404,12 +1447,19 @@ const SettingsModal = {
   template: document.getElementById('settings-modal-template').innerHTML,
   setup(props, { emit }) {
     const memoryCategories = MEMORY_CATEGORIES;
+    const sections = [
+      { id: 'general', label: 'General' },
+      { id: 'providers', label: 'Providers & Models' },
+      { id: 'memory', label: 'Memory & Context' },
+      { id: 'documents', label: 'Documents & Output' }
+    ];
+    const section = ref('general');
     function toggleCornerstone(cat) {
       const cur = props.settings.cornerstoneCategories || [];
       const next = cur.includes(cat) ? cur.filter(c => c !== cat) : [...cur, cat];
       emit('update', 'cornerstoneCategories', next);
     }
-    return { memoryCategories, toggleCornerstone };
+    return { memoryCategories, sections, section, toggleCornerstone };
   }
 };
 
@@ -1479,7 +1529,7 @@ const MessageBubble = {
       this.$el.querySelectorAll('pre').forEach(pre => {
         if (pre.querySelector('.copy-btn')) return;
         const btn = document.createElement('button');
-        btn.className = 'copy-btn absolute top-2 right-2 text-xs px-2 py-0.5 rounded bg-slate-600 hover:bg-slate-500 text-slate-200 opacity-0 group-hover:opacity-100 transition-opacity';
+        btn.className = 'copy-btn absolute top-2 right-2 text-xs px-2 py-0.5 rounded bg-slate-600 hover:bg-slate-500 text-slate-200 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity';
         btn.textContent = 'Copy';
         btn.onclick = () => {
           navigator.clipboard.writeText(pre.querySelector('code')?.innerText || '');
@@ -1503,6 +1553,7 @@ const app = createApp({
   setup() {
     const settings = reactive({ ...DEFAULT_SETTINGS });
     const showSettings = ref(false);
+    const sidebarOpen = ref(false);
     const searchQuery = ref('');
     const toasts = ref([]);
     const memoryCategories = MEMORY_CATEGORIES;
@@ -1706,6 +1757,7 @@ const app = createApp({
       const previousChat = currentChat.value;
       currentChatId.value = id;
       editingTitle.value = false;
+      sidebarOpen.value = false;
       attachments.value = [];
       pendingDocIds.value = [];
       showSegmentsViewer.value = false;
@@ -2328,7 +2380,7 @@ const app = createApp({
     });
 
     return {
-      settings, showSettings, searchQuery, toasts, memoryCategories,
+      settings, showSettings, sidebarOpen, searchQuery, toasts, memoryCategories,
       chats, chatIds, profiles, currentChatId, currentChat, messages,
       groupedChats, currentSessionInfo,
       chatMemories, chatMemoriesDesc, currentSegments, showSegmentsViewer, compacting,
