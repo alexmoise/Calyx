@@ -43,6 +43,13 @@
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.min.js"></script>
 
 <style>
+  /* Native form controls (select dropdowns, scrollbars) follow theme */
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
+  /* Explicit option colors: some browsers only partially dark-theme native <select> popups */
+  select option { background-color: #fff; color: #1e293b; }
+  .dark select option { background-color: #0f172a; color: #f1f5f9; }
+
   /* Prevent flash of unstyled content before Vue mounts */
   [v-cloak] { display: none !important; }
 
