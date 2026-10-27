@@ -310,12 +310,12 @@
     <!-- Attachment previews -->
     <div v-if="attachments.length" class="shrink-0 px-4 pt-2">
       <div class="max-w-3xl mx-auto flex flex-wrap gap-2">
-        <div v-for="(att, i) in attachments" :key="i"
-          class="relative flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-xs">
-          <icon :name="att.type === 'image' ? 'Image' : 'FileText'" :size="13" class="text-indigo-500"></icon>
-          <span class="max-w-[120px] truncate">{{ att.name }}</span>
-          <button @click="removeAttachment(i)" class="ml-0.5 text-slate-400 hover:text-red-500">
-            <icon name="X" :size="12"></icon>
+        <div v-for="(att, i) in attachments" :key="i" class="relative group">
+          <img :src="'data:' + att.mimeType + ';base64,' + att.data" :alt="att.name"
+            class="w-16 h-16 object-cover rounded-lg border border-slate-300 dark:border-slate-700">
+          <button @click="removeAttachment(i)"
+            class="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-slate-700 text-white hover:bg-red-500">
+            <icon name="X" :size="10"></icon>
           </button>
         </div>
       </div>
@@ -830,11 +830,14 @@
     <div v-if="msg.role === 'user'"
       class="max-w-[90%] sm:max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 text-sm bg-indigo-600 text-white break-words whitespace-pre-wrap">
       <div v-if="msg.attachments && msg.attachments.length" class="flex flex-wrap gap-1.5 mb-2">
-        <span v-for="(att, i) in msg.attachments" :key="i"
-          class="flex items-center gap-1 rounded-md bg-indigo-500/60 px-2 py-0.5 text-xs">
-          <icon :name="att.type === 'image' ? 'Image' : 'FileText'" :size="11"></icon>
-          {{ att.name }}
-        </span>
+        <template v-for="(att, i) in msg.attachments" :key="i">
+          <img v-if="att.type === 'image' && imageUrls[att.imageId]" :src="imageUrls[att.imageId]" :alt="att.name"
+            class="w-20 h-20 object-cover rounded-lg">
+          <span v-else class="flex items-center gap-1 rounded-md bg-indigo-500/60 px-2 py-0.5 text-xs">
+            <icon :name="att.type === 'image' ? 'Image' : 'FileText'" :size="11"></icon>
+            {{ att.name }}
+          </span>
+        </template>
       </div>
       {{ msg.content }}
     </div>
@@ -921,6 +924,13 @@ function renderMarkdown(content) {
 /* ---------------------------------------------------------------------- */
 function escapeXml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Text placeholder for a message's image attachments, used once a turn has
+// been folded into a compaction segment (images are not resent for those).
+function imagePlaceholder(m) {
+  const names = (m.attachments || []).filter(a => a.type === 'image').map(a => a.name);
+  return names.length ? ` [image: ${names.join(', ')}]` : '';
 }
 
 // UTC, explicit — for LLM-facing content (unambiguous across device timezone changes)
@@ -1176,13 +1186,43 @@ async function* parseSSE(res, provider, meta) {
   }
 }
 
+// Converts a provider-neutral history message ({ role, content, images? })
+// into each provider's wire format. `images` is an array of { mimeType, data }
+// (base64, no data: prefix) — absent/empty for plain-text turns.
+function toOpenAIMessage(m) {
+  if (!m.images?.length) return { role: m.role, content: m.content };
+  return {
+    role: m.role,
+    content: [
+      { type: 'text', text: m.content },
+      ...m.images.map(img => ({ type: 'image_url', image_url: { url: `data:${img.mimeType};base64,${img.data}` } }))
+    ]
+  };
+}
+function toAnthropicMessage(m) {
+  if (!m.images?.length) return { role: m.role, content: m.content };
+  return {
+    role: m.role,
+    content: [
+      ...m.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.data } })),
+      { type: 'text', text: m.content }
+    ]
+  };
+}
+function toGeminiContent(m) {
+  const parts = m.images?.length
+    ? [...m.images.map(img => ({ inline_data: { mime_type: img.mimeType, data: img.data } })), { text: m.content }]
+    : [{ text: m.content }];
+  return { role: m.role === 'assistant' ? 'model' : 'user', parts };
+}
+
 async function* streamOpenAI(msgs, settings, meta) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.openaiApiKey}` },
     body: JSON.stringify({
       model: settings.selectedModel,
-      messages: msgs,
+      messages: msgs.map(toOpenAIMessage),
       stream: true,
       max_completion_tokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS
     })
@@ -1198,7 +1238,7 @@ async function* streamAnthropic(msgs, settings, systemBlocks, meta) {
     model: settings.selectedModel,
     max_tokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS,
     stream: true,
-    messages: msgs
+    messages: msgs.map(toAnthropicMessage)
   };
   if (systemBlocks && systemBlocks.length) body.system = systemBlocks;
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1219,7 +1259,7 @@ async function* streamAnthropic(msgs, settings, systemBlocks, meta) {
 async function* streamGemini(msgs, settings, sysParts, meta) {
   const modelId = settings.selectedModel.startsWith('models/') ? settings.selectedModel : `models/${settings.selectedModel}`;
   const url = `https://generativelanguage.googleapis.com/v1beta/${modelId}:streamGenerateContent?key=${settings.geminiApiKey}&alt=sse`;
-  const contents = msgs.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const contents = msgs.map(toGeminiContent);
   const body = { contents, generationConfig: { maxOutputTokens: settings.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS } };
   if (sysParts && sysParts.length) body.systemInstruction = { parts: sysParts };
   const res = await fetch(url, {
@@ -1255,13 +1295,54 @@ async function callUtilityModel(prompt, settings) {
 /* ---------------------------------------------------------------------- */
 /* File processing                                                          */
 /* ---------------------------------------------------------------------- */
-function readFileAsBase64(file) {
+const IMAGE_MAX_DIMENSION = 1568;
+const IMAGE_QUALITY = 0.85;
+
+function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result.split(',')[1]);
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+}
+
+// Resizes to at most IMAGE_MAX_DIMENSION on the longest side and re-encodes
+// as WebP (quality 0.85). Falls back to PNG (if the source has alpha) or
+// JPEG when the browser can't encode WebP via canvas (e.g. Safari silently
+// returns PNG instead of throwing). Strips EXIF metadata as a side effect.
+async function normalizeImage(file) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    throw new Error(`Unsupported or corrupt image: ${file.name}`);
+  }
+  const scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const c2d = canvas.getContext('2d');
+  c2d.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+
+  const hasAlpha = file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp';
+
+  let blob = await canvasToBlob(canvas, 'image/webp', IMAGE_QUALITY);
+  if (!blob || blob.type !== 'image/webp') {
+    blob = hasAlpha
+      ? await canvasToBlob(canvas, 'image/png')
+      : await canvasToBlob(canvas, 'image/jpeg', IMAGE_QUALITY);
+  }
+  if (!blob) throw new Error(`Failed to encode image: ${file.name}`);
+
+  const data = await blobToBase64(blob);
+  return { mimeType: blob.type, data, width: w, height: h };
 }
 
 async function extractPdfText(file, pageLimit, sizeLimitMB) {
@@ -1359,6 +1440,18 @@ db.version(3).stores({
   segments: 'id, chatId, toAt',
   digests: 'id, chatId',
   vault: 'key'
+});
+db.version(4).stores({
+  chats: 'id, updatedAt, isPinned, profileId',
+  messages: 'id, chatId, createdAt',
+  settings: 'key',
+  files: 'id, chatId, hash',
+  profiles: 'id, updatedAt',
+  memories: 'id, chatId, createdAt, category, pinned',
+  segments: 'id, chatId, toAt',
+  digests: 'id, chatId',
+  vault: 'key',
+  images: 'id, chatId, messageId'
 });
 
 /* ---------------------------------------------------------------------- */
@@ -1579,6 +1672,7 @@ const PLAIN_FIELDS = {
   memories: ['id', 'chatId', 'createdAt', 'updatedAt', 'category', 'pinned'],
   segments: ['id', 'chatId', 'toAt', 'createdAt', 'updatedAt'],
   digests: ['id', 'chatId', 'updatedAt'],
+  images: ['id', 'chatId', 'messageId', 'createdAt', 'updatedAt'],
   settings: ['key', 'updatedAt']
 };
 const SETTINGS_PLAINTEXT_KEYS = new Set(['theme']);
@@ -1702,7 +1796,7 @@ async function hasUnsealedRecords() {
 
 const BACKUP_FORMAT = 'calyx-backup';
 const BACKUP_VERSION = 5;
-const DB_SCHEMA_VERSION = 3;
+const DB_SCHEMA_VERSION = 4;
 const IMPORT_BATCH_SIZE = 500;
 
 const DEFAULT_SETTINGS = {
@@ -2273,7 +2367,16 @@ const MessageBubble = {
       const chatId = props.msg.sessionProposal?.chatId;
       return !chatId || props.chatIds.includes(chatId);
     });
-    return { rendered, msgMemories, titleDraft, sessionStillExists };
+    const imageUrls = ref({});
+    const imageIds = (props.msg.attachments || []).filter(a => a.type === 'image').map(a => a.imageId).filter(Boolean);
+    if (imageIds.length) {
+      dbBulkGet('images', imageIds).then(rows => {
+        const urls = {};
+        rows.forEach(img => { if (img) urls[img.id] = `data:${img.mimeType};base64,${img.data}`; });
+        imageUrls.value = urls;
+      });
+    }
+    return { rendered, msgMemories, titleDraft, sessionStillExists, imageUrls };
   },
   mounted() { this.highlightCode(); },
   updated() { this.highlightCode(); },
@@ -2550,12 +2653,13 @@ const app = createApp({
     }
 
     async function deleteChatInternal(chatId) {
-      await db.transaction('rw', db.chats, db.messages, db.files, db.memories, db.segments, db.digests, async () => {
+      await db.transaction('rw', db.chats, db.messages, db.files, db.memories, db.segments, db.digests, db.images, async () => {
         await db.messages.where('chatId').equals(chatId).delete();
         await db.files.where('chatId').equals(chatId).delete();
         await db.memories.where('chatId').equals(chatId).delete();
         await db.segments.where('chatId').equals(chatId).delete();
         await db.digests.where('chatId').equals(chatId).delete();
+        await db.images.where('chatId').equals(chatId).delete();
         await db.chats.delete(chatId);
       });
     }
@@ -2734,7 +2838,7 @@ const app = createApp({
       const excess = rawMessages.length - settings.minRawTurns;
       if (excess <= 0) { if (force) showToast('Not enough turns to compact yet', 'error'); return; }
       const toSummarize = rawMessages.slice(0, excess);
-      const transcript = toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n');
+      const transcript = toSummarize.map(m => `${m.role}: ${m.content}${imagePlaceholder(m)}`).join('\n\n');
       const summary = await callUtilityModel(segmentSummaryPrompt(transcript), settings);
       const now = Date.now();
       await dbAdd('segments', {
@@ -2848,9 +2952,16 @@ const app = createApp({
         : 1;
       const calyxContext = `<calyx_context>\nCurrent date/time: ${fmtUTC(Date.now())} (user local: ${localNowMeta()})\n${profile ? `Profile: ${escapeXml(profile.name)}\n` : ''}Session: #${sessionN} (${fmtUTC(chat.createdAt)})\n</calyx_context>`;
 
-      const historyMsgs = rawMessages.map(m => ({
-        role: m.role,
-        content: m.role === 'user' ? `[${fmtUTC(m.createdAt)}] ${m.content}` : m.content
+      const historyMsgs = await Promise.all(rawMessages.map(async m => {
+        const imageIds = (m.attachments || []).filter(a => a.type === 'image').map(a => a.imageId).filter(Boolean);
+        const images = imageIds.length
+          ? (await dbBulkGet('images', imageIds)).filter(Boolean).map(img => ({ mimeType: img.mimeType, data: img.data }))
+          : [];
+        return {
+          role: m.role,
+          content: m.role === 'user' ? `[${fmtUTC(m.createdAt)}] ${m.content}` : m.content,
+          ...(images.length ? { images } : {})
+        };
       }));
 
       const branchingEnabled = !!(profile && settings.branchSessions);
@@ -2885,10 +2996,13 @@ const app = createApp({
       return blocks;
     }
 
+    const IMAGE_TOKEN_ESTIMATE = 1600;
+
     function estimateContextTokens(ctx) {
       const flat = buildFlatSystemText(ctx);
       const historyText = ctx.historyMsgs.map(m => m.content).join('\n');
-      return estimateTokens(flat) + estimateTokens(historyText);
+      const imageCount = ctx.historyMsgs.reduce((s, m) => s + (m.images?.length || 0), 0);
+      return estimateTokens(flat) + estimateTokens(historyText) + imageCount * IMAGE_TOKEN_ESTIMATE;
     }
 
     async function maybeAutoCompact() {
@@ -2933,8 +3047,8 @@ const app = createApp({
         try {
           const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
           if (file.type.startsWith('image/')) {
-            const data = await readFileAsBase64(file);
-            attachments.value.push({ type: 'image', name: file.name, mimeType: file.type, data });
+            const img = await normalizeImage(file);
+            attachments.value.push({ type: 'image', name: file.name, ...img });
           } else if (file.type === 'application/pdf' || ext === '.pdf') {
             const text = await extractPdfText(file, settings.pdfPageLimit, settings.pdfSizeLimitMB);
             await addChatFile(file.name, 'pdf', text);
@@ -2976,11 +3090,26 @@ const app = createApp({
       const newDocNames = pendingDocIds.value
         .map(id => chatFiles.value.find(f => f.id === id)?.name)
         .filter(Boolean);
-      const content = text || (newDocNames.length ? `Attached: ${newDocNames.join(', ')}` : '');
+      const imageNames = attachments.value.map(a => a.name);
+      const attachedNames = [...newDocNames, ...imageNames];
+      const content = text || (attachedNames.length ? `Attached: ${attachedNames.join(', ')}` : '');
 
       const now = Date.now();
+      const msgId = crypto.randomUUID();
+      const pendingImages = attachments.value;
+
+      const imageChips = await Promise.all(pendingImages.map(async a => {
+        const imageId = crypto.randomUUID();
+        await dbAdd('images', {
+          id: imageId, chatId: currentChatId.value, messageId: msgId,
+          name: a.name, mimeType: a.mimeType, data: a.data,
+          width: a.width, height: a.height, createdAt: now, updatedAt: now
+        });
+        return { type: 'image', name: a.name, imageId };
+      }));
+
       const userMsg = {
-        id: crypto.randomUUID(),
+        id: msgId,
         chatId: currentChatId.value,
         role: 'user',
         content,
@@ -2991,7 +3120,7 @@ const app = createApp({
             const f = chatFiles.value.find(x => x.id === id);
             return f ? { type: f.type, name: f.name } : null;
           }).filter(Boolean),
-          ...attachments.value.map(a => ({ type: a.type, name: a.name }))
+          ...imageChips
         ]
       };
       await dbAdd('messages', userMsg);

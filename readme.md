@@ -68,8 +68,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
 
 ```
 
-**Known Issue:** Attached images are never sent to the model APIs — base64 image data is dropped when a message is persisted, and only text content is included in the API history. Tracked for a fix in Phase 2.
-
 ---
 
 ### Phase 1: Foundation & The Polished MVP — ✅ Complete
@@ -102,7 +100,7 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
   * Auto-resizing prompt input field (`Enter` to send).
 
 * **File Attachments:**
-  * Image ingestion (file picker) with base64 encoding; attachment shown as a removable name chip before send.
+  * Image ingestion (file picker) with client-side normalization (resize to ≤1568px, re-encoded to WebP — JPEG/PNG fallback where WebP encoding isn't available) and visual thumbnail previews in the attachment tray and message bubbles; images are sent to the model API for every turn still in the raw (uncompacted) context window.
   * PDF text extraction via `pdf.js`, bounded by configurable page and file-size limits.
   * Plain-text (`.txt`, `.md`) ingestion via `FileReader`, with whitespace normalization and SHA-256 content deduplication.
   * **Chat-Level Documents:** Text/PDF attachments are pinned to the chat (not the message) and reused across every turn, with a chip bar showing per-file and total estimated token counts (configurable warning threshold).
@@ -148,7 +146,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
 
 * **Client-Side Document & Vision Ingestion:**
   * **Drag-and-Drop & Clipboard Paste:** Ingest images by dragging onto the window or pasting from clipboard, in addition to the file picker.
-  * **Visual Thumbnails:** Render actual image previews in the attachment tray instead of icon-only chips.
 
 * **Render Pipeline Enhancements:**
   * LaTeX mathematical formula rendering via KaTeX.

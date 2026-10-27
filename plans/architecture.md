@@ -11,7 +11,7 @@
 *   **PDF Parsing:** PDF.js (via CDN) for client-side text extraction.
 
 ## 2. Storage Schema (IndexedDB / Dexie)
-Database name: **`Calyx`** (schema version 3). The legacy `CalyxDB` (integer `++id` keys) is migrated once on boot — see §9.4 — and deleted after a verified copy.
+Database name: **`Calyx`** (schema version 4). The legacy `CalyxDB` (integer `++id` keys) is migrated once on boot — see §9.4 — and deleted after a verified copy.
 
 **Encryption at rest (schema v3+):** Every table except `vault` stores records as an envelope — a small set of plaintext index fields (needed for Dexie `where()` queries) plus one encrypted blob (`enc: { v, kid, iv, ct }`, AES-GCM-256) holding everything else. See `plans/encryption.md` for the full key hierarchy, migration, and backup format. The **`vault`** table (`key` primary key, single row `'keyring'`) holds the keyring — wrapped master-secret slots (password/recovery/device) — and is never included in export/import or future remote sync.
 
@@ -19,11 +19,12 @@ Database name: **`Calyx`** (schema version 3). The legacy `CalyxDB` (integer `++
 *   Every mutable record carries an **`updatedAt`** timestamp (ms epoch), used for last-write-wins conflict resolution on import merge and future remote sync.
 *   **`profiles`**: `id`, `name`, `systemPrompt` (persona prompt, layered after the global prompt), `createdAt`, `updatedAt`. Optional grouping container for related chats ("sessions") — see §8.
 *   **`chats`**: `id`, `title`, `createdAt`, `updatedAt`, `isPinned`, `profileId` (indexed, nullable — `null` = unassigned/standalone chat). The per-chat `systemPrompt` override field was retired in schema v2 in favor of profile persona prompts; stripped from existing records on upgrade and on import of older backups.
-*   **`messages`**: `id`, `chatId` (indexed), `role` (user/assistant), `content`, `createdAt`, `updatedAt`, `attachments` (array of objects: `{ type, name }` — image attachments additionally carry `data`/`mimeType` in-memory only, never persisted with the message), `memoryIds` (array, assistant messages only — memories extracted from that specific reply), `sessionProposal` (object, assistant messages only, optional — `{ title, purpose, status: 'pending'|'created'|'dismissed', chatId }`, see §7.8).
+*   **`messages`**: `id`, `chatId` (indexed), `role` (user/assistant), `content`, `createdAt`, `updatedAt`, `attachments` (array of objects: `{ type, name }` for documents, `{ type: 'image', name, imageId }` for images — the image data itself lives in the `images` table), `memoryIds` (array, assistant messages only — memories extracted from that specific reply), `sessionProposal` (object, assistant messages only, optional — `{ title, purpose, status: 'pending'|'created'|'dismissed', chatId }`, see §7.8).
 *   **`files`**: `id`, `chatId` (indexed), `name`, `type` (`text`/`pdf`), `hash` (indexed, SHA-256 of normalized text, used for dedup), `text`, `tokens` (estimated), `createdAt`, `updatedAt`. Chat-scoped document attachments, decoupled from individual messages so they persist across every turn.
 *   **`memories`**: `id`, `chatId` (indexed — ownership, not a FK to the active chat context), `category` (`trait`/`value`/`goal`/`event`/`person`/`decision`/`agreement`/`preference`/`pattern`/`state`/`other`), `content`, `when` (nullable — the period the fact *refers to*, e.g. "childhood", distinct from `createdAt`), `source` (`model`/`user`/`manual`), `pinned` (bool, indexed), `sourceMessageId`, `createdAt`, `updatedAt`. See §8 for how these compose into profile-level context.
 *   **`segments`**: `id`, `chatId` (indexed), `content` (dense structured summary), `fromMessageId`, `toMessageId`, `fromAt`, `toAt` (indexed), `tokens` (estimated), `createdAt`, `updatedAt`. Frozen summaries of compacted raw turns — see §8.
 *   **`digests`**: `id` (= `chatId`), `chatId`, `content` (150–300 token incremental summary of the whole session), `coversUntilAt` (last message timestamp folded in), `createdAt`, `updatedAt`.
+*   **`images`**: `id`, `chatId` (indexed), `messageId` (indexed), `name`, `mimeType`, `data` (base64, normalized — see §4), `width`, `height`, `createdAt`, `updatedAt`. One row per attached image; referenced from `message.attachments[].imageId`. Deleted along with its chat.
 *   **`settings`**: Key-value pairs (`{ key, value, updatedAt }`).
     *   `systemPrompt` (Global — layered after the fixed built-in protocol block, before any profile persona prompt; see §8)
     *   `openaiApiKey`, `anthropicApiKey`, `geminiApiKey` — **secret**, see §9.1
@@ -51,7 +52,7 @@ A unified class/functions to handle API communication, supporting **streaming** 
 *   *Future Proofing:* The architecture should allow querying the API to fetch available models dynamically in the future.
 
 ## 4. Multi-modal Processing Pipeline
-*   **Images:** Read via `FileReader` to base64. Rendered as a name chip in the attachment tray (icon + filename only — visual thumbnails are a planned Phase 2 item, see `readme.md` §3). *(Known gap: base64 data is not persisted with the message and is not currently sent to model APIs.)*
+*   **Images:** Decoded via `createImageBitmap` (applies EXIF orientation, strips metadata), downscaled on canvas to a max 1568px longest side, and re-encoded to WebP (quality 0.85) — falling back to PNG (if the source had transparency) or JPEG when the browser's canvas can't encode WebP (e.g. Safari). The normalized base64 result is persisted in the `images` table (`normalizeImage` in `index.html`), referenced from the message via `attachments[].imageId`, and rendered as a thumbnail in both the input tray and the message bubble. Sent to the model API as an `images` array on every user turn still within the raw (uncompacted) context window (§7.6); turns folded into a compaction segment are replaced with an `[image: name]` text placeholder. Each provider adapter maps this neutral shape to its own wire format (`toOpenAIMessage`/`toAnthropicMessage`/`toGeminiContent`).
 *   **Documents (TXT/MD/PDF):** Extracted via `FileReader`/`pdf.js`, normalized (CRLF→LF, trailing-space strip, blank-line collapse), hashed (SHA-256) for chat-scoped deduplication, and stored in the `files` table — decoupled from any single message.
 *   **Context Assembly:** On each turn, all chat `files` are rendered into a single `<documents><document index="n" name="...">…</document></documents>` block and injected into the system/instruction area (after the system prompt, documents last) rather than inlined into message `content`:
     *   **Anthropic:** `system` is sent as a block array; the documents block carries `cache_control: { type: "ephemeral" }` for prompt caching.
@@ -149,7 +150,7 @@ Any object key (including nested, e.g. a future MCP server's `headers.Authorizat
 ### 9.2 Backup File Format
 Current format is an **encrypted `.calyx` container** (magic bytes, plaintext JSON header, chunked AES-GCM ciphertext). The plaintext payload inside is the same gzip NDJSON stream as before:
 ```
-{"type":"header","format":"calyx-backup","version":5,"dbSchema":3,"exportedAt":"…"}
+{"type":"header","format":"calyx-backup","version":5,"dbSchema":4,"exportedAt":"…"}
 {"type":"record","table":"chats","data":{…}}
 …
 {"type":"footer","counts":{"chats":N,"messages":N,…}}

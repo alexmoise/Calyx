@@ -113,7 +113,7 @@ File: `calyx-backup-<ISO>.calyx` (binary).
 chunk = [u32 ctLen][ct]   // AES-GCM, 64 KiB plaintext
 ```
 - Header (plaintext, authenticated as AAD of every chunk):
-  `{ format:"calyx-backup", version:5, dbSchema:3, exportedAt, enc:{ alg:"AES-GCM-256", chunk:65536, fileKeyWraps:[…], keyring? } }`
+  `{ format:"calyx-backup", version:5, dbSchema:4, exportedAt, enc:{ alg:"AES-GCM-256", chunk:65536, fileKeyWraps:[…], keyring? } }`
 - Random per-file key FK; `fileKeyWraps`:
   - `{ type:"kid", kid, iv, wrapped }` — FK wrapped by EK (same/synced instance → silent import).
   - Password mode: header embeds password + recovery slots of the keyring → other instance imports with source password or recovery key.
