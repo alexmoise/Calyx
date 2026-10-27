@@ -41,6 +41,8 @@ Database name: **`Calyx`** (schema version 3). The legacy `CalyxDB` (integer `++
 
 **Future tables** (agents, MCP server definitions, skills, to-dos, etc.) must declare an `id` (UUID) primary key and an `updatedAt` field to automatically participate in export/import/sync — see §9. New fields on existing tables are encrypted by default (see §2); add to `PLAIN_FIELDS` only if genuinely needed as a Dexie index.
 
+**Known risk — shared `file://` storage origin:** When opened via `file://` (double-click, local path), all local HTML files share a single browser-wide storage origin (literal origin `"file://"`, with no per-folder/per-filename isolation in Chromium). Consequently: (1) moving, renaming, or copying `index.html` anywhere on the same machine, in the same browser profile, continues to see the same `Calyx` database — this is expected and relied upon (e.g. portable-browser installs on a USB stick carry their profile, and thus the DB, with them across machines); (2) any other local HTML file opened in that same browser profile that also creates an IndexedDB named `Calyx` would read/write the *same physical database*, with no isolation — a theoretical collision/corruption risk. Mitigations (unique DB name, boot-time fingerprint check) were considered and deliberately deferred; this is accepted as a documented risk rather than an active defense.
+
 ## 3. Model API Abstraction Layer
 A unified class/functions to handle API communication, supporting **streaming** for all providers.
 *   **OpenAI Adapter:** Uses `fetch` to OpenAI's chat completions endpoint. Default model: `gpt-5.6-terra`.
