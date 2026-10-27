@@ -105,7 +105,10 @@
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100 antialiased">
 
-<div id="app" v-cloak class="flex h-dvh w-screen overflow-hidden">
+<div id="app" v-cloak>
+
+<template v-if="vaultState === 'ready'">
+<div class="flex h-dvh w-screen overflow-hidden">
 
   <!-- ============ SIDEBAR ============ -->
   <div v-if="sidebarOpen" class="lg:hidden fixed inset-0 z-30 bg-black/50" @click="sidebarOpen = false"></div>
@@ -158,8 +161,14 @@
       </template>
     </div>
 
+    <button v-if="!hasPasswordProtection" @click="settingsSection = 'security'; showSettings = true"
+      class="mx-2 mb-2 flex items-center gap-1.5 justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs px-2 py-1.5 hover:bg-amber-500/20 transition-colors">
+      <icon name="ShieldAlert" :size="13"></icon>
+      Not protected — set a password
+    </button>
+
     <div class="p-2 border-t border-slate-200 dark:border-slate-800 flex gap-1">
-      <button @click="exportData" title="Export data"
+      <button @click="exportData(promptExportPasswordFn)" title="Export data"
         class="flex-1 flex items-center gap-1.5 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-xs px-2 py-2 transition-colors">
         <icon name="Download" :size="15"></icon>
         Export
@@ -169,12 +178,12 @@
         <icon name="Upload" :size="15"></icon>
         Import
       </button>
-      <button @click="showSettings = true" title="Settings"
+      <button @click="settingsSection = 'general'; showSettings = true" title="Settings"
         class="flex-1 flex items-center gap-1.5 justify-center rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-xs px-2 py-2 transition-colors">
         <icon name="Settings" :size="15"></icon>
         Settings
       </button>
-      <input ref="importFileInput" type="file" accept=".gz" class="hidden" @change="handleImportFile">
+      <input ref="importFileInput" type="file" accept=".calyx,.gz" class="hidden" @change="handleImportFile">
     </div>
   </aside>
 
@@ -224,6 +233,9 @@
 
       <button @click="toggleTheme" class="max-sm:hidden p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 pointer-coarse:tap-target" title="Toggle theme">
         <icon :name="settings.theme === 'dark' ? 'Sun' : 'Moon'" :size="18"></icon>
+      </button>
+      <button v-if="hasPasswordProtection" @click="lockVaultNow" class="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 pointer-coarse:tap-target" title="Lock">
+        <icon name="Lock" :size="18"></icon>
       </button>
     </header>
 
@@ -389,7 +401,7 @@
   </aside>
 
   <!-- ============ SETTINGS MODAL ============ -->
-  <settings-modal v-if="showSettings" :settings="settings" @close="showSettings = false" @update="saveSetting"></settings-modal>
+  <settings-modal v-if="showSettings" :settings="settings" :initial-section="settingsSection" @close="showSettings = false" @update="saveSetting"></settings-modal>
 
   <!-- ============ PROFILE EDITOR MODAL ============ -->
   <div v-if="showProfileEditor" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="showProfileEditor = false">
@@ -435,7 +447,7 @@
         This permanently deletes all current chats, messages, and files. API keys are kept.
       </p>
       <div class="flex items-center justify-between pt-2">
-        <button @click="exportData" class="text-xs text-indigo-500 hover:underline">Back up first</button>
+        <button @click="exportData(promptExportPasswordFn)" class="text-xs text-indigo-500 hover:underline">Back up first</button>
         <div class="flex gap-2">
           <button @click="cancelImport" class="rounded-lg px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Cancel</button>
           <button @click="confirmImport" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Import</button>
@@ -444,15 +456,127 @@
     </div>
   </div>
 
-  <!-- ============ TOASTS ============ -->
-  <div class="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 max-lg:left-4 z-50 flex flex-col gap-2 pointer-events-none">
-    <div v-for="t in toasts" :key="t.id"
-      class="pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium shadow-lg transition-all"
-      :class="t.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900'">
-      <icon :name="t.type === 'error' ? 'AlertCircle' : 'CheckCircle'" :size="15"></icon>
-      {{ t.message }}
+  <!-- ============ IMPORT SECRET PROMPT (encrypted .calyx from another instance) ============ -->
+  <div v-if="importSecretPrompt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="importSecretPrompt.resolve(null)">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-5 flex flex-col gap-3 text-sm">
+      <h2 class="text-base font-semibold">
+        {{ importSecretPrompt.kind === 'export-password' ? 'Export Password Required' : 'Source Password Required' }}
+      </h2>
+      <p class="text-xs text-slate-400">
+        {{ importSecretPrompt.kind === 'export-password'
+          ? 'This backup was protected with a one-time export password.'
+          : 'This backup was created on another Calyx instance. Enter its password or recovery key.' }}
+      </p>
+      <input v-model="importSecretPrompt.value" type="password" autofocus @keyup.enter="importSecretPrompt.resolve(importSecretPrompt.value)"
+        class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5"
+        :placeholder="importSecretPrompt.kind === 'export-password' ? 'Export password' : 'Password or recovery key'">
+      <div class="flex justify-end gap-2 pt-1">
+        <button @click="importSecretPrompt.resolve(null)" class="rounded-lg px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Cancel</button>
+        <button @click="importSecretPrompt.resolve(importSecretPrompt.value)" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Continue</button>
+      </div>
     </div>
   </div>
+
+  <!-- ============ EXPORT PASSWORD PROMPT (no-password mode) ============ -->
+  <div v-if="exportPasswordPrompt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="exportPasswordPrompt.resolve(null)">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-5 flex flex-col gap-3 text-sm">
+      <h2 class="text-base font-semibold">Set an Export Password</h2>
+      <p class="text-xs text-slate-400">No account password is set, so this backup needs its own one-time password (min {{ minPasswordLength }} characters) to keep it encrypted. You'll need it to import this file later.</p>
+      <input v-model="exportPasswordPrompt.value" type="password" autofocus @keyup.enter="exportPasswordPrompt.resolve(exportPasswordPrompt.value)"
+        class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5" placeholder="Export password">
+      <div class="flex justify-end gap-2 pt-1">
+        <button @click="exportPasswordPrompt.resolve(null)" class="rounded-lg px-3 py-1.5 hover:bg-slate-200 dark:hover:bg-slate-800">Cancel</button>
+        <button @click="exportPasswordPrompt.resolve(exportPasswordPrompt.value)" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Export</button>
+      </div>
+    </div>
+  </div>
+
+
+</div>
+</template>
+
+<!-- ============ FIRST RUN ============ -->
+<template v-else-if="vaultState === 'first-run'">
+  <div class="flex items-center justify-center h-dvh w-screen p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-6 flex flex-col gap-4 text-sm text-center">
+      <h1 class="text-lg font-semibold">Welcome to Calyx</h1>
+      <p class="text-slate-400">Protect your data with a password, or continue without one for now — you can add it later in Settings.</p>
+      <div v-if="!showFirstRunPasswordForm" class="flex flex-col gap-2">
+        <button @click="showFirstRunPasswordForm = true" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2">Set password (recommended)</button>
+        <button @click="continueWithoutPassword" class="rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2">Continue without password</button>
+      </div>
+      <div v-else class="flex flex-col gap-2 text-left">
+        <input v-model="securityForm.newPassword" type="password" placeholder="New password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+        <input v-model="securityForm.confirmPassword" type="password" placeholder="Confirm password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+        <p v-if="securityForm.error" class="text-xs text-red-500">{{ securityForm.error }}</p>
+        <button @click="submitFirstRunSetPassword" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2">Create Password</button>
+        <button @click="showFirstRunPasswordForm = false" class="text-xs text-slate-400 hover:underline">Back</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ============ RECOVERY KEY DISPLAY (first run) ============ -->
+<template v-else-if="vaultState === 'show-recovery'">
+  <div class="flex items-center justify-center h-dvh w-screen p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-6 flex flex-col gap-3 text-sm">
+      <h1 class="text-lg font-semibold">Save Your Recovery Key</h1>
+      <p class="text-xs text-amber-600 dark:text-amber-400 font-medium">This is shown only once. Without your password, it's the only way to recover your data.</p>
+      <div class="font-mono text-sm bg-slate-100 dark:bg-slate-800 rounded-lg px-3 py-2 break-all select-all">{{ recoveryKeyDisplay }}</div>
+      <div class="flex gap-2">
+        <button @click="copyRecoveryKey" class="flex-1 rounded-lg bg-slate-200 dark:bg-slate-800 px-3 py-1.5">Copy</button>
+        <button @click="downloadRecoveryKey" class="flex-1 rounded-lg bg-slate-200 dark:bg-slate-800 px-3 py-1.5">Download</button>
+      </div>
+      <button @click="finishFirstRunRecovery" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2">I've saved it — Continue</button>
+    </div>
+  </div>
+</template>
+
+<!-- ============ MIGRATING ============ -->
+<template v-else-if="vaultState === 'migrating'">
+  <div class="flex items-center justify-center h-dvh w-screen p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-6 flex flex-col gap-3 text-sm text-center">
+      <h1 class="text-lg font-semibold">Upgrading Calyx</h1>
+      <p class="text-slate-400">Encrypting your existing data for the first time. This only happens once.</p>
+      <p v-if="migrationProgress" class="text-xs text-slate-400">{{ migrationProgress }}</p>
+    </div>
+  </div>
+</template>
+
+<!-- ============ MIGRATION FAILED ============ -->
+<template v-else-if="vaultState === 'migration-failed'">
+  <div class="flex items-center justify-center h-dvh w-screen p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-6 flex flex-col gap-3 text-sm text-center">
+      <h1 class="text-lg font-semibold text-red-500">Upgrade Failed</h1>
+      <p class="text-slate-400">{{ migrationError }}</p>
+      <p class="text-xs text-slate-400">No data was deleted. Reload to try again.</p>
+      <button @click="location.reload()" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2">Reload</button>
+    </div>
+  </div>
+</template>
+
+<!-- ============ LOCKED ============ -->
+<template v-else-if="vaultState === 'locked'">
+  <div class="flex items-center justify-center h-dvh w-screen p-4">
+    <div class="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 shadow-xl p-6 flex flex-col gap-3 text-sm">
+      <h1 class="text-lg font-semibold text-center">Calyx is Locked</h1>
+      <input v-model="unlockSecret" type="password" autofocus @keyup.enter="submitUnlock"
+        class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5" placeholder="Password or recovery key">
+      <p v-if="unlockError" class="text-xs text-red-500">{{ unlockError }}</p>
+      <button @click="submitUnlock" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2">Unlock</button>
+    </div>
+  </div>
+</template>
+
+<!-- ============ TOASTS (shown in every vault state) ============ -->
+<div class="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 max-lg:left-4 z-50 flex flex-col gap-2 pointer-events-none">
+  <div v-for="t in toasts" :key="t.id"
+    class="pointer-events-auto flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium shadow-lg transition-all"
+    :class="t.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900'">
+    <icon :name="t.type === 'error' ? 'AlertCircle' : 'CheckCircle'" :size="15"></icon>
+    {{ t.message }}
+  </div>
+</div>
 
 </div>
 
@@ -631,6 +755,59 @@
             </div>
           </template>
 
+          <template v-if="section === 'security'">
+            <p v-if="securityForm.error" class="text-xs text-red-500">{{ securityForm.error }}</p>
+
+            <template v-if="recoveryKeyDisplay">
+              <p class="text-xs text-amber-600 dark:text-amber-400 font-medium">Save this recovery key now — it won't be shown again. It's the only way back in if you forget your password.</p>
+              <div class="font-mono text-sm bg-slate-100 dark:bg-slate-800 rounded-lg px-3 py-2 break-all select-all">{{ recoveryKeyDisplay }}</div>
+              <div class="flex gap-2">
+                <button @click="copyRecoveryKey" class="flex-1 rounded-lg bg-slate-200 dark:bg-slate-800 px-3 py-1.5">Copy</button>
+                <button @click="downloadRecoveryKey" class="flex-1 rounded-lg bg-slate-200 dark:bg-slate-800 px-3 py-1.5">Download</button>
+              </div>
+              <button @click="recoveryKeyDisplay = null" class="self-start rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">I've saved it</button>
+            </template>
+
+            <div v-else-if="!hasPasswordProtection" class="flex flex-col gap-2">
+              <label class="font-medium">Set Password</label>
+              <p class="text-xs text-slate-400">Your data is encrypted but not password-protected — anyone with access to this device's files can read it. Set a password to lock it.</p>
+              <input v-model="securityForm.newPassword" type="password" autocomplete="new-password" placeholder="New password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <input v-model="securityForm.confirmPassword" type="password" autocomplete="new-password" placeholder="Confirm password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+              <button @click="submitSetPassword" class="self-start rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Set Password</button>
+            </div>
+
+            <template v-else>
+              <div>
+                <label class="block font-medium mb-1">Auto-lock after (minutes)</label>
+                <input type="number" min="0" step="1" :value="settings.autoLockMinutes"
+                  @change="$emit('update', 'autoLockMinutes', Math.max(0, Math.floor(+$event.target.value || 0)))"
+                  class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <p class="text-xs text-slate-400 mt-1">Locks after this many idle minutes. 0 = off.</p>
+              </div>
+              <hr class="border-slate-200 dark:border-slate-800">
+              <div class="flex flex-col gap-2">
+                <label class="font-medium">Change Password</label>
+                <input v-model="securityForm.currentSecret" type="password" autocomplete="current-password" placeholder="Current password or recovery key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <input v-model="securityForm.newPassword" type="password" autocomplete="new-password" placeholder="New password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <input v-model="securityForm.confirmPassword" type="password" autocomplete="new-password" placeholder="Confirm new password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <button @click="submitChangePassword" class="self-start rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Change Password</button>
+              </div>
+              <hr class="border-slate-200 dark:border-slate-800">
+              <div class="flex flex-col gap-2">
+                <label class="font-medium">Regenerate Recovery Key</label>
+                <p class="text-xs text-slate-400">Invalidates the old recovery key.</p>
+                <input v-model="securityForm.regenerateSecret" type="password" autocomplete="current-password" placeholder="Current password or recovery key" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <button @click="submitRegenerateRecoveryKey" class="self-start rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5">Regenerate</button>
+              </div>
+              <hr class="border-slate-200 dark:border-slate-800">
+              <div class="flex flex-col gap-2">
+                <label class="font-medium text-red-500">Remove Password</label>
+                <input v-model="securityForm.removePasswordSecret" type="password" autocomplete="current-password" placeholder="Current password" class="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-1.5">
+                <button @click="submitRemovePassword" class="self-start rounded-lg border border-red-500 text-red-500 hover:bg-red-500/10 px-3 py-1.5">Remove Password</button>
+              </div>
+            </template>
+          </template>
+
         </div>
       </div>
 
@@ -721,7 +898,7 @@
 </script>
 
 <script>
-const { createApp, reactive, ref, computed, onMounted, nextTick, watch } = Vue;
+const { createApp, reactive, ref, computed, onMounted, nextTick, watch, provide, inject } = Vue;
 
 /* ---------------------------------------------------------------------- */
 /* Markdown renderer                                                        */
@@ -1099,11 +1276,6 @@ function normalizeText(t) {
   return t.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-async function sha256(t) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 function buildDocsBlock(files) {
   if (!files.length) return '';
   const docs = files.map((f, i) => `<document index="${i + 1}" name="${escapeXml(f.name)}">\n${f.text}\n</document>`).join('\n');
@@ -1170,9 +1342,360 @@ db.version(2).stores({
   delete c.systemPrompt;
   if (c.profileId === undefined) c.profileId = null;
 }));
+db.version(3).stores({
+  chats: 'id, updatedAt, isPinned, profileId',
+  messages: 'id, chatId, createdAt',
+  settings: 'key',
+  files: 'id, chatId, hash',
+  profiles: 'id, updatedAt',
+  memories: 'id, chatId, createdAt, category, pinned',
+  segments: 'id, chatId, toAt',
+  digests: 'id, chatId',
+  vault: 'key'
+});
+
+/* ---------------------------------------------------------------------- */
+/* Encryption: primitives, keyring, record envelope, data-access layer     */
+/* See plans/encryption.md for the full design.                            */
+/* ---------------------------------------------------------------------- */
+const PBKDF2_ITERATIONS = 600000;
+const KDF_ALG = 'PBKDF2-SHA256';
+const MS_AAD = new TextEncoder().encode('calyx-ms');
+
+// Chunked to avoid "Maximum call stack size exceeded" from spreading large
+// typed arrays into String.fromCharCode's argument list (browser call-stack
+// limits are typically far below the size of a large chat message/file).
+function b64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+function unb64(str) { return Uint8Array.from(atob(str), c => c.charCodeAt(0)).buffer; }
+function randomBytes(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+
+const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function base32Encode(bytes) {
+  let bits = 0, value = 0, out = '';
+  for (const byte of bytes) {
+    value = (value << 8) | byte; bits += 8;
+    while (bits >= 5) { out += CROCKFORD_ALPHABET[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += CROCKFORD_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+function generateRecoveryKey() {
+  return base32Encode(randomBytes(16)).match(/.{1,4}/g).join('-');
+}
+
+async function deriveKekFromSecret(secret, salt, iterations) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function importMasterSecret(rawBytes) {
+  return crypto.subtle.importKey('raw', rawBytes, 'HKDF', false, ['deriveKey']);
+}
+async function deriveFromMaster(baseKey, info, alg) {
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode(info) },
+    baseKey, alg === 'HMAC' ? { name: 'HMAC', hash: 'SHA-256' } : { name: 'AES-GCM', length: 256 },
+    false, alg === 'HMAC' ? ['sign'] : ['encrypt', 'decrypt']
+  );
+}
+async function aesEncrypt(key, plaintextBytes, aad) {
+  const iv = randomBytes(12);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, key, plaintextBytes);
+  return { iv: b64(iv), ct: b64(ct) };
+}
+async function aesDecrypt(key, ivB64, ctB64, aad) {
+  const iv = new Uint8Array(unb64(ivB64));
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad }, key, unb64(ctB64));
+}
+async function hmacHex(key, text) {
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* ---- Vault runtime state (in-memory only; never persisted) ---- */
+const VAULT = { unlocked: false, kid: null, dataKey: null, hmacKey: null, exportKey: null };
+
+async function deriveVaultKeys(msBytes, kid) {
+  const base = await importMasterSecret(msBytes);
+  VAULT.kid = kid;
+  VAULT.dataKey = await deriveFromMaster(base, 'calyx-data-v1', 'AES-GCM');
+  VAULT.hmacKey = await deriveFromMaster(base, 'calyx-hmac-v1', 'HMAC');
+  VAULT.exportKey = await deriveFromMaster(base, 'calyx-export-v1', 'AES-GCM');
+  VAULT.unlocked = true;
+}
+function lockVault() {
+  VAULT.unlocked = false; VAULT.kid = null; VAULT.dataKey = null; VAULT.hmacKey = null; VAULT.exportKey = null;
+}
+
+/* ---- Keyring: wraps the master secret (MS) under one or more unlock slots ---- */
+async function loadKeyring() { return db.vault.get('keyring'); }
+async function saveKeyring(kr) { return db.vault.put({ key: 'keyring', ...kr }); }
+function hasPasswordSlot(kr) { return kr.slots.some(s => s.type === 'password'); }
+
+async function buildSecretSlot(type, secret, msBytes) {
+  const salt = randomBytes(16);
+  const kek = await deriveKekFromSecret(secret, salt, PBKDF2_ITERATIONS);
+  const { iv, ct } = await aesEncrypt(kek, msBytes, MS_AAD);
+  return { type, kdf: { alg: KDF_ALG, iter: PBKDF2_ITERATIONS, salt: b64(salt) }, iv, wrapped: ct };
+}
+async function buildDeviceSlot(msBytes) {
+  const deviceKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  const { iv, ct } = await aesEncrypt(deviceKey, msBytes, MS_AAD);
+  return { type: 'device', iv, wrapped: ct, deviceKey };
+}
+// Pure: tries every password/recovery slot against a candidate secret, returns raw MS bytes or null.
+async function tryUnwrapMasterSecret(slots, secret) {
+  for (const slot of slots.filter(s => s.type === 'password' || s.type === 'recovery')) {
+    try {
+      const salt = new Uint8Array(unb64(slot.kdf.salt));
+      const kek = await deriveKekFromSecret(secret, salt, slot.kdf.iter);
+      const ptBuf = await aesDecrypt(kek, slot.iv, slot.wrapped, MS_AAD);
+      return new Uint8Array(ptBuf);
+    } catch { /* wrong secret for this slot; try next */ }
+  }
+  return null;
+}
+async function deriveExportKeyFromMs(msBytes) {
+  const base = await importMasterSecret(msBytes);
+  return deriveFromMaster(base, 'calyx-export-v1', 'AES-GCM');
+}
+
+async function createKeyringNoPassword() {
+  const msBytes = randomBytes(32);
+  const kid = crypto.randomUUID();
+  const deviceSlot = await buildDeviceSlot(msBytes);
+  await saveKeyring({ kid, slots: [deviceSlot] });
+  await deriveVaultKeys(msBytes, kid);
+}
+async function unlockWithDeviceSlot(kr) {
+  const slot = kr.slots.find(s => s.type === 'device');
+  if (!slot) throw new Error('No device key available');
+  const ptBuf = await aesDecrypt(slot.deviceKey, slot.iv, slot.wrapped, MS_AAD);
+  await deriveVaultKeys(new Uint8Array(ptBuf), kr.kid);
+}
+async function unlockWithSecret(kr, secret) {
+  const msBytes = await tryUnwrapMasterSecret(kr.slots, secret);
+  if (!msBytes) return false;
+  await deriveVaultKeys(msBytes, kr.kid);
+  return true;
+}
+
+// Extracts current MS bytes from the active unlocked session by re-reading
+// the keyring's device slot (no-password) or re-deriving is not possible from
+// VAULT alone (data key only) — callers in password/recovery flows always have
+// the plaintext secret on hand (current password or recovery key) and use
+// tryUnwrapMasterSecret directly; this helper is for the no-password -> password
+// transition where only the device slot can reveal MS.
+async function extractMsViaDeviceSlot(kr) {
+  const slot = kr.slots.find(s => s.type === 'device');
+  if (!slot) throw new Error('No device key available');
+  const ptBuf = await aesDecrypt(slot.deviceKey, slot.iv, slot.wrapped, MS_AAD);
+  return new Uint8Array(ptBuf);
+}
+
+const MIN_PASSWORD_LENGTH = 10;
+function validatePasswordLength(pw) {
+  if (!pw || pw.length < MIN_PASSWORD_LENGTH) throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+}
+
+// No-password -> password mode. Creates password + recovery slots, drops the
+// device slot. Data is never re-encrypted (only MS wrapping changes).
+// Returns the recovery key (shown once).
+async function setPassword(password) {
+  validatePasswordLength(password);
+  const kr = await loadKeyring();
+  const msBytes = hasPasswordSlot(kr) ? null : await extractMsViaDeviceSlot(kr);
+  if (!msBytes) throw new Error('Password already set; use changePassword');
+  const recoveryKey = generateRecoveryKey();
+  const passwordSlot = await buildSecretSlot('password', password, msBytes);
+  const recoverySlot = await buildSecretSlot('recovery', recoveryKey, msBytes);
+  await saveKeyring({ kid: kr.kid, slots: [passwordSlot, recoverySlot] });
+  return recoveryKey;
+}
+
+// Requires the current password or recovery key. Rewraps MS under a new password slot.
+async function changePassword(currentSecret, newPassword) {
+  validatePasswordLength(newPassword);
+  const kr = await loadKeyring();
+  const msBytes = await tryUnwrapMasterSecret(kr.slots, currentSecret);
+  if (!msBytes) throw new Error('Current password or recovery key is incorrect');
+  const recoverySlot = kr.slots.find(s => s.type === 'recovery');
+  const passwordSlot = await buildSecretSlot('password', newPassword, msBytes);
+  await saveKeyring({ kid: kr.kid, slots: [passwordSlot, recoverySlot] });
+}
+
+// Requires the current password. Drops password+recovery slots, recreates a device slot.
+async function removePassword(currentSecret) {
+  const kr = await loadKeyring();
+  const msBytes = await tryUnwrapMasterSecret(kr.slots, currentSecret);
+  if (!msBytes) throw new Error('Password is incorrect');
+  const deviceSlot = await buildDeviceSlot(msBytes);
+  await saveKeyring({ kid: kr.kid, slots: [deviceSlot] });
+}
+
+// Requires the current password or recovery key. Returns the new recovery key (shown once).
+async function regenerateRecoveryKey(currentSecret) {
+  const kr = await loadKeyring();
+  const msBytes = await tryUnwrapMasterSecret(kr.slots, currentSecret);
+  if (!msBytes) throw new Error('Current password or recovery key is incorrect');
+  const passwordSlot = kr.slots.find(s => s.type === 'password');
+  const recoveryKey = generateRecoveryKey();
+  const recoverySlot = await buildSecretSlot('recovery', recoveryKey, msBytes);
+  await saveKeyring({ kid: kr.kid, slots: [passwordSlot, recoverySlot] });
+  return recoveryKey;
+}
+
+async function detectVaultState() {
+  const kr = await loadKeyring();
+  if (!kr) {
+    for (const name of ['chats', 'messages', 'profiles', 'memories', 'files', 'segments', 'digests']) {
+      if (await db.table(name).count() > 0) return 'migrate';
+    }
+    return 'first-run';
+  }
+  return kr.slots.some(s => s.type === 'device') ? 'auto-unlock' : 'locked';
+}
+
+/* ---- Record envelope: plaintext index fields + one AES-GCM blob for the rest ---- */
+const PLAIN_FIELDS = {
+  chats: ['id', 'createdAt', 'updatedAt', 'isPinned', 'profileId'],
+  messages: ['id', 'chatId', 'createdAt', 'updatedAt'],
+  files: ['id', 'chatId', 'hash', 'createdAt', 'updatedAt'],
+  profiles: ['id', 'createdAt', 'updatedAt'],
+  memories: ['id', 'chatId', 'createdAt', 'updatedAt', 'category', 'pinned'],
+  segments: ['id', 'chatId', 'toAt', 'createdAt', 'updatedAt'],
+  digests: ['id', 'chatId', 'updatedAt'],
+  settings: ['key', 'updatedAt']
+};
+const SETTINGS_PLAINTEXT_KEYS = new Set(['theme']);
+
+function primaryKeyName(table) { return db.table(table).schema.primKey.name; }
+
+// Encrypts every field not listed in PLAIN_FIELDS into one `enc` envelope.
+// Future tables default to fully encrypted except `id`/`updatedAt`.
+async function seal(table, record) {
+  if (table === 'settings' && SETTINGS_PLAINTEXT_KEYS.has(record.key)) return { ...record };
+  if (!VAULT.unlocked) throw new Error('Vault is locked');
+  const plainFields = PLAIN_FIELDS[table] || ['id', 'updatedAt'];
+  const pk = primaryKeyName(table);
+  const out = {}, toEncrypt = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (plainFields.includes(k)) out[k] = v; else toEncrypt[k] = v;
+  }
+  if (!Object.keys(toEncrypt).length) return out;
+  const aad = new TextEncoder().encode(`${table}|${record[pk]}`);
+  const pt = new TextEncoder().encode(JSON.stringify(toEncrypt));
+  const { iv, ct } = await aesEncrypt(VAULT.dataKey, pt, aad);
+  out.enc = { v: 1, kid: VAULT.kid, iv, ct };
+  return out;
+}
+
+async function open(table, stored) {
+  if (!stored || !stored.enc) return stored;
+  if (!VAULT.unlocked) throw new Error('Vault is locked');
+  const pk = primaryKeyName(table);
+  const aad = new TextEncoder().encode(`${table}|${stored[pk]}`);
+  const ptBuf = await aesDecrypt(VAULT.dataKey, stored.enc.iv, stored.enc.ct, aad);
+  const decrypted = JSON.parse(new TextDecoder().decode(ptBuf));
+  const { enc, ...plain } = stored;
+  return { ...plain, ...decrypted };
+}
+
+/* ---- Data-access layer: every read/write of chat content goes through here ---- */
+async function dbGet(table, key) { return open(table, await db.table(table).get(key)); }
+async function dbBulkGet(table, keys) {
+  const rows = await db.table(table).bulkGet(keys);
+  return Promise.all(rows.map(r => open(table, r)));
+}
+async function dbWhereEquals(table, index, value, sortField) {
+  const coll = db.table(table).where(index).equals(value);
+  const rows = sortField ? await coll.sortBy(sortField) : await coll.toArray();
+  return Promise.all(rows.map(r => open(table, r)));
+}
+async function dbWhereAnyOf(table, index, values) {
+  const rows = values.length ? await db.table(table).where(index).anyOf(values).toArray() : [];
+  return Promise.all(rows.map(r => open(table, r)));
+}
+async function dbToArray(table) {
+  const rows = await db.table(table).toArray();
+  return Promise.all(rows.map(r => open(table, r)));
+}
+async function dbAdd(table, record) { return db.table(table).add(await seal(table, record)); }
+async function dbBulkAdd(table, records) { return db.table(table).bulkAdd(await Promise.all(records.map(r => seal(table, r)))); }
+async function dbPut(table, record) { return db.table(table).put(await seal(table, record)); }
+async function dbBulkPut(table, records) { return db.table(table).bulkPut(await Promise.all(records.map(r => seal(table, r)))); }
+// For modify() calls that only ever touch declared plaintext fields (no decryption needed).
+async function dbUpdatePlainWhere(table, index, value, changes) {
+  const plainFields = PLAIN_FIELDS[table] || ['id', 'updatedAt'];
+  for (const k of Object.keys(changes)) {
+    if (!plainFields.includes(k)) throw new Error(`dbUpdatePlainWhere: "${k}" is not a plaintext field on "${table}"`);
+  }
+  return db.table(table).where(index).equals(value).modify(changes);
+}
+
+/* ---- One-time migration: seals every pre-encryption plaintext record ---- */
+// Idempotent/resumable: safe to call again after a prior partial failure —
+// it never creates a new keyring itself (that would orphan records already
+// sealed under the previous master secret). Callers must ensure the vault is
+// already unlocked (fresh migration: caller calls createKeyringNoPassword()
+// first; resume on an existing keyring: caller unlocks via device/password
+// first) before invoking this.
+async function sealRemainingPlaintextRecords(onProgress) {
+  const tableNames = db.tables.map(t => t.name).filter(n => n !== 'vault');
+  for (const name of tableNames) {
+    const table = db.table(name);
+    let offset = 0;
+    const pageSize = 500;
+    while (true) {
+      const page = await table.offset(offset).limit(pageSize).toArray();
+      if (!page.length) break;
+      const todo = page.filter(r => !r.enc && !(name === 'settings' && SETTINGS_PLAINTEXT_KEYS.has(r.key)));
+      if (todo.length) {
+        const sealed = await Promise.all(todo.map(async r => {
+          if (name === 'files') r = { ...r, hash: await hmacHex(VAULT.hmacKey, r.text) };
+          return seal(name, r);
+        }));
+        await table.bulkPut(sealed);
+      }
+      offset += page.length;
+      if (onProgress) onProgress(name, offset);
+      if (page.length < pageSize) break;
+    }
+  }
+  for (const name of tableNames) {
+    const unsealed = await db.table(name).filter(r => !r.enc && !(name === 'settings' && SETTINGS_PLAINTEXT_KEYS.has(r.key))).count();
+    if (unsealed > 0) throw new Error(`Migration incomplete for table "${name}" (${unsealed} unsealed records)`);
+  }
+}
+
+// Fresh migration (no keyring yet): create the no-password keyring, then seal.
+async function migratePlaintextDatabase(onProgress) {
+  await createKeyringNoPassword();
+  await sealRemainingPlaintextRecords(onProgress);
+}
+
+// Cheap safety-net check used on every boot (after unlock) to catch a
+// migration interrupted by a prior crash — e.g. mid-way through sealing when
+// the keyring already exists, so detectVaultState() alone can't tell.
+async function hasUnsealedRecords() {
+  const tableNames = db.tables.map(t => t.name).filter(n => n !== 'vault');
+  for (const name of tableNames) {
+    const count = await db.table(name).filter(r => !r.enc && !(name === 'settings' && SETTINGS_PLAINTEXT_KEYS.has(r.key))).count();
+    if (count > 0) return true;
+  }
+  return false;
+}
+
 const BACKUP_FORMAT = 'calyx-backup';
-const BACKUP_VERSION = 4;
-const DB_SCHEMA_VERSION = 2;
+const BACKUP_VERSION = 5;
+const DB_SCHEMA_VERSION = 3;
 const IMPORT_BATCH_SIZE = 500;
 
 const DEFAULT_SETTINGS = {
@@ -1194,23 +1717,28 @@ const DEFAULT_SETTINGS = {
   minRawTurns: 20,
   memoryBudgetPct: 30,
   cornerstoneCategories: ['trait', 'value', 'goal', 'agreement'],
-  branchSessions: true
+  branchSessions: true,
+  autoLockMinutes: 15
 };
 
 async function loadSettingsFromDb() {
-  const rows = await db.settings.toArray();
+  const rows = await dbToArray('settings');
   const stored = Object.fromEntries(rows.map(r => [r.key, r.value]));
   return { ...DEFAULT_SETTINGS, ...stored };
 }
 
 async function persistSetting(key, value) {
-  await db.settings.put({ key, value, updatedAt: Date.now() });
+  await dbPut('settings', { key, value, updatedAt: Date.now() });
 }
 
 /* ---------------------------------------------------------------------- */
 /* Backup Export / Import                                                  */
+/* Encrypted ".calyx" container (current) + legacy plaintext ".ndjson.gz"  */
+/* (v4, read-only) import path. See plans/encryption.md §8-9.              */
 /* ---------------------------------------------------------------------- */
 const EXPORT_PAGE_SIZE = 500;
+const CALYX_ENC_MAGIC = 'CALYXENC';
+const EXPORT_CHUNK_SIZE = 65536;
 
 function assertStreamingCompressionSupported() {
   if (typeof CompressionStream === 'undefined' || typeof DecompressionStream === 'undefined') {
@@ -1218,10 +1746,20 @@ function assertStreamingCompressionSupported() {
   }
 }
 
-// Reads every table generically (future tables round-trip automatically)
-// and yields NDJSON lines: one header, N records, one footer with counts.
+function u32be(n) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n); return b; }
+function u64beCounter(n) { const b = new Uint8Array(8); const dv = new DataView(b.buffer); dv.setUint32(0, Math.floor(n / 4294967296)); dv.setUint32(4, n >>> 0); return b; }
+function concatBytes(...arrs) {
+  const total = arrs.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const a of arrs) { out.set(a, o); o += a.length; }
+  return out;
+}
+
+// Reads every table generically (future tables round-trip automatically),
+// decrypting each record first, and yields NDJSON lines: header, N records, footer.
 async function* generateBackupLines() {
-  const tableNames = db.tables.map(t => t.name);
+  const tableNames = db.tables.map(t => t.name).filter(n => n !== 'vault');
   const counts = {};
   yield JSON.stringify({ type: 'header', format: BACKUP_FORMAT, version: BACKUP_VERSION, dbSchema: DB_SCHEMA_VERSION, exportedAt: new Date().toISOString() }) + '\n';
   for (const name of tableNames) {
@@ -1231,8 +1769,9 @@ async function* generateBackupLines() {
     while (true) {
       const page = await table.offset(offset).limit(EXPORT_PAGE_SIZE).toArray();
       if (!page.length) break;
-      for (const record of page) {
-        if (name === 'settings' && isSecretKey(record.key)) continue;
+      for (const stored of page) {
+        if (name === 'settings' && isSecretKey(stored.key)) continue;
+        const record = await open(name, stored);
         yield JSON.stringify({ type: 'record', table: name, data: sanitizeRecord(name, record) }) + '\n';
         counts[name]++;
       }
@@ -1254,29 +1793,118 @@ function backupLineStream() {
   });
 }
 
-async function exportData() {
-  try {
-    assertStreamingCompressionSupported();
-    const gzipStream = backupLineStream()
-      .pipeThrough(new TextEncoderStream())
-      .pipeThrough(new CompressionStream('gzip'));
-    const filename = `calyx-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson.gz`;
+// Wraps a fresh random file key (FK) so the backup can be opened later:
+// always by the current vault's export key (fast path — same instance, or a
+// future sync peer sharing the keyring), plus either the password+recovery
+// keyring slots (password mode — any holder of the password or recovery key
+// can import) or a one-time export password (no-password mode, prompted at
+// export time). Device slots are never exported (device-bound, non-portable).
+async function buildFileKeyWraps(fileKeyBytes, exportPassword) {
+  const kr = await loadKeyring();
+  const wraps = {};
+  { const { iv, ct } = await aesEncrypt(VAULT.exportKey, fileKeyBytes, MS_AAD); wraps.kid = { kid: VAULT.kid, iv, wrapped: ct }; }
+  if (hasPasswordSlot(kr)) {
+    wraps.keyring = { kid: kr.kid, slots: kr.slots.filter(s => s.type !== 'device').map(({ type, kdf, iv, wrapped }) => ({ type, kdf, iv, wrapped })) };
+  } else {
+    if (!exportPassword) throw new Error('Export password is required when no account password is set');
+    validatePasswordLength(exportPassword);
+    const salt = randomBytes(16);
+    const kek = await deriveKekFromSecret(exportPassword, salt, PBKDF2_ITERATIONS);
+    const { iv, ct } = await aesEncrypt(kek, fileKeyBytes, MS_AAD);
+    wraps.exportPassword = { kdf: { alg: KDF_ALG, iter: PBKDF2_ITERATIONS, salt: b64(salt) }, iv, wrapped: ct };
+  }
+  return wraps;
+}
 
+// Buffers plaintext bytes into fixed-size chunks and AES-GCM encrypts each,
+// prefixed with its ciphertext length. AAD binds header hash + chunk index +
+// a final-chunk flag, so truncation, reordering, and header tampering all
+// fail authentication on decrypt.
+function makeEncryptChunkStream(fileKey, headerHashBytes, ivPrefix) {
+  let buffer = new Uint8Array(0);
+  let index = 0;
+  async function encryptChunk(bytes, isFinal) {
+    const iv = concatBytes(ivPrefix, u64beCounter(index));
+    const aad = concatBytes(headerHashBytes, u32be(index), new Uint8Array([isFinal ? 1 : 0]));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, fileKey, bytes));
+    index++;
+    return concatBytes(u32be(ct.length), ct);
+  }
+  return new TransformStream({
+    async transform(chunk, controller) {
+      buffer = concatBytes(buffer, chunk);
+      while (buffer.length >= EXPORT_CHUNK_SIZE) {
+        controller.enqueue(await encryptChunk(buffer.slice(0, EXPORT_CHUNK_SIZE), false));
+        buffer = buffer.slice(EXPORT_CHUNK_SIZE);
+      }
+    },
+    async flush(controller) {
+      controller.enqueue(await encryptChunk(buffer, true));
+    }
+  });
+}
+
+function prependStream(prefixBytes, sourceStream) {
+  const reader = sourceStream.getReader();
+  let prefixSent = false;
+  return new ReadableStream({
+    async pull(controller) {
+      if (!prefixSent) { controller.enqueue(prefixBytes); prefixSent = true; return; }
+      const { value, done } = await reader.read();
+      if (done) { controller.close(); return; }
+      controller.enqueue(value);
+    }
+  });
+}
+
+// promptExportPassword: async () => string|null (null = user cancelled). Only
+// invoked in no-password mode, where no keyring secret exists to embed.
+async function exportData(promptExportPassword) {
+  try {
+    if (!VAULT.unlocked) throw new Error('Unlock Calyx before exporting');
+    assertStreamingCompressionSupported();
+
+    const kr = await loadKeyring();
+    let exportPassword = null;
+    if (!hasPasswordSlot(kr)) {
+      exportPassword = await promptExportPassword();
+      if (exportPassword === null) return;
+    }
+
+    const fileKeyBytes = randomBytes(32);
+    const fileKey = await crypto.subtle.importKey('raw', fileKeyBytes, 'AES-GCM', false, ['encrypt']);
+    const fileKeyWraps = await buildFileKeyWraps(fileKeyBytes, exportPassword);
+    const ivPrefix = randomBytes(4);
+    const headerObj = {
+      format: 'calyx-backup', version: BACKUP_VERSION, dbSchema: DB_SCHEMA_VERSION, exportedAt: new Date().toISOString(),
+      enc: { alg: 'AES-GCM-256', chunk: EXPORT_CHUNK_SIZE, ivPrefix: b64(ivPrefix), fileKeyWraps }
+    };
+    const headerBytes = new TextEncoder().encode(JSON.stringify(headerObj));
+    const headerHashBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', headerBytes));
+    const prefix = concatBytes(new TextEncoder().encode(CALYX_ENC_MAGIC), u32be(headerBytes.length), headerBytes);
+
+    const cipherStream = backupLineStream()
+      .pipeThrough(new TextEncoderStream())
+      .pipeThrough(new CompressionStream('gzip'))
+      .pipeThrough(makeEncryptChunkStream(fileKey, headerHashBytes, ivPrefix));
+    const fullStream = prependStream(prefix, cipherStream);
+
+    const filename = `calyx-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.calyx`;
     if (window.showSaveFilePicker) {
       let handle;
       try {
         handle = await window.showSaveFilePicker({
           suggestedName: filename,
-          types: [{ description: 'Calyx Backup', accept: { 'application/gzip': ['.gz'] } }]
+          types: [{ description: 'Calyx Encrypted Backup', accept: { 'application/octet-stream': ['.calyx'] } }]
         });
       } catch (err) {
         if (err.name === 'AbortError') return;
         throw err;
       }
       const writable = await handle.createWritable();
-      await gzipStream.pipeTo(writable);
+      await fullStream.pipeTo(writable);
     } else {
-      const blob = await new Response(gzipStream).blob();
+      const blob = await new Response(fullStream).blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = filename; a.click();
@@ -1288,17 +1916,110 @@ async function exportData() {
   }
 }
 
-async function sniffGzip(file) {
-  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
-  return head.length === 2 && head[0] === 0x1f && head[1] === 0x8b;
+async function sniffBackupFormat(file) {
+  const head8 = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  if (new TextDecoder().decode(head8) === CALYX_ENC_MAGIC) return 'enc';
+  if (head8.length >= 2 && head8[0] === 0x1f && head8[1] === 0x8b) return 'gzip';
+  return null;
 }
 
-// Decompresses and line-splits the backup file without loading it whole into memory.
-async function* readNdjsonLines(file) {
-  const reader = file.stream()
-    .pipeThrough(new DecompressionStream('gzip'))
-    .pipeThrough(new TextDecoderStream())
-    .getReader();
+async function parseEncHeader(file) {
+  const headBytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (headBytes.length < 12) throw new Error('Corrupt backup: truncated header');
+  const headerLen = new DataView(headBytes.buffer).getUint32(8);
+  const headerBytes = new Uint8Array(await file.slice(12, 12 + headerLen).arrayBuffer());
+  if (headerBytes.length < headerLen) throw new Error('Corrupt backup: truncated header');
+  let header;
+  try { header = JSON.parse(new TextDecoder().decode(headerBytes)); } catch { throw new Error('Corrupt backup: invalid header'); }
+  const headerHashBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', headerBytes));
+  return { header, headerHashBytes, bodyOffset: 12 + headerLen };
+}
+
+// Unwraps the file key via, in order: the local vault's export key (same
+// kid — silent), the embedded password/recovery keyring slots (prompts for
+// the source password or recovery key), or a one-time export password
+// (prompts). promptSecret: async (kind) => string|null ('password-or-recovery'|'export-password').
+async function unwrapFileKey(header, promptSecret) {
+  const wraps = header.enc.fileKeyWraps;
+  const ivPrefix = new Uint8Array(unb64(header.enc.ivPrefix));
+  if (VAULT.unlocked && wraps.kid && wraps.kid.kid === VAULT.kid) {
+    try {
+      const ptBuf = await aesDecrypt(VAULT.exportKey, wraps.kid.iv, wraps.kid.wrapped, MS_AAD);
+      return { fileKey: await crypto.subtle.importKey('raw', ptBuf, 'AES-GCM', false, ['decrypt']), ivPrefix };
+    } catch { /* kid matched but key differs (shouldn't happen) — fall through */ }
+  }
+  if (wraps.keyring) {
+    const secret = await promptSecret('password-or-recovery');
+    if (secret === null) throw new Error('Import cancelled');
+    const msBytes = await tryUnwrapMasterSecret(wraps.keyring.slots, secret);
+    if (!msBytes) throw new Error('Incorrect password or recovery key');
+    const exportKey = await deriveExportKeyFromMs(msBytes);
+    const ptBuf = await aesDecrypt(exportKey, wraps.kid.iv, wraps.kid.wrapped, MS_AAD);
+    return { fileKey: await crypto.subtle.importKey('raw', ptBuf, 'AES-GCM', false, ['decrypt']), ivPrefix };
+  }
+  if (wraps.exportPassword) {
+    const secret = await promptSecret('export-password');
+    if (secret === null) throw new Error('Import cancelled');
+    const salt = new Uint8Array(unb64(wraps.exportPassword.kdf.salt));
+    const kek = await deriveKekFromSecret(secret, salt, wraps.exportPassword.kdf.iter);
+    try {
+      const ptBuf = await aesDecrypt(kek, wraps.exportPassword.iv, wraps.exportPassword.wrapped, MS_AAD);
+      return { fileKey: await crypto.subtle.importKey('raw', ptBuf, 'AES-GCM', false, ['decrypt']), ivPrefix };
+    } catch { throw new Error('Incorrect export password'); }
+  }
+  throw new Error('Corrupt backup: no usable key wrap');
+}
+
+// Lookahead-buffered chunk decryptor: the final chunk's AAD flag can only be
+// known once the next chunk fails to materialize, so one chunk is always held
+// back by one step.
+async function* decryptChunks(file, bodyOffset, fileKey, headerHashBytes, ivPrefix) {
+  const reader = file.slice(bodyOffset).stream().getReader();
+  let buf = new Uint8Array(0);
+  let index = 0;
+  async function readMore() {
+    const { value, done } = await reader.read();
+    if (done) return false;
+    buf = concatBytes(buf, value);
+    return true;
+  }
+  async function nextRawChunk() {
+    while (buf.length < 4) { if (!(await readMore())) return null; }
+    const len = new DataView(buf.buffer, buf.byteOffset, 4).getUint32(0);
+    while (buf.length < 4 + len) { if (!(await readMore())) throw new Error('Corrupt backup: truncated chunk'); }
+    const ct = buf.slice(4, 4 + len);
+    buf = buf.slice(4 + len);
+    return ct;
+  }
+  let cur = await nextRawChunk();
+  if (cur === null) throw new Error('Corrupt backup: empty file');
+  while (cur !== null) {
+    const next = await nextRawChunk();
+    const isFinal = next === null;
+    const iv = concatBytes(ivPrefix, u64beCounter(index));
+    const aad = concatBytes(headerHashBytes, u32be(index), new Uint8Array([isFinal ? 1 : 0]));
+    let pt;
+    try { pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: aad }, fileKey, cur); }
+    catch { throw new Error('Corrupt or tampered backup file'); }
+    yield new Uint8Array(pt);
+    index++;
+    cur = next;
+  }
+}
+
+function streamFromAsyncGenerator(gen) {
+  return new ReadableStream({
+    async pull(controller) {
+      const { value, done } = await gen.next();
+      if (done) { controller.close(); return; }
+      controller.enqueue(value);
+    }
+  });
+}
+
+// Decompresses + line-splits a gzip byte stream without loading the whole thing into memory.
+async function* readNdjsonLinesFromStream(gzipByteStream) {
+  const reader = gzipByteStream.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
   let buf = '';
   try {
     while (true) {
@@ -1319,12 +2040,14 @@ async function* readNdjsonLines(file) {
 }
 
 // Pass 1: validates the entire file (header, record shapes, footer counts)
-// without writing anything. Throws on the first problem found.
-async function validateBackupFile(file) {
-  const tableNames = new Set(db.tables.map(t => t.name));
+// without writing anything. Throws on the first problem found. `makeLines` is
+// a factory so the file can be re-read (and re-decrypted) for Pass 2 without
+// re-prompting for a secret (the unwrapped file key is captured by closure).
+async function validateBackupFile(makeLines) {
+  const tableNames = new Set(db.tables.map(t => t.name).filter(n => n !== 'vault'));
   let sawHeader = false, sawFooter = false;
   const counts = {};
-  for await (const line of readNdjsonLines(file)) {
+  for await (const line of makeLines()) {
     let obj;
     try { obj = JSON.parse(line); } catch { throw new Error('Corrupt backup: invalid JSON line'); }
     if (obj.type === 'header') {
@@ -1358,11 +2081,14 @@ async function validateBackupFile(file) {
 }
 
 // Pass 2: re-reads the already-validated file and writes it in batches.
-async function writeBackupFile(file, mode) {
-  const tableNames = db.tables.map(t => t.name);
+// Records arrive decrypted (plaintext) from either format; each is sealed
+// with the LOCAL vault's keys before being written (backup files are never
+// tied to the importing instance's encryption).
+async function writeBackupFile(makeLines, mode) {
+  const tableNames = db.tables.map(t => t.name).filter(n => n !== 'vault');
 
   if (mode === 'replace') {
-    await db.transaction('rw', db.tables, async () => {
+    await db.transaction('rw', db.tables.filter(t => t.name !== 'vault'), async () => {
       for (const name of tableNames) {
         if (name === 'settings') {
           const secretRows = (await db.settings.toArray()).filter(r => isSecretKey(r.key));
@@ -1381,34 +2107,56 @@ async function writeBackupFile(file, mode) {
     if (!batch.length || (!force && batch.length < IMPORT_BATCH_SIZE)) return;
     const toWrite = batch.splice(0, batch.length);
     if (name === 'settings') {
-      if (mode === 'replace') await db.settings.bulkPut(toWrite);
+      if (mode === 'replace') await db.table(name).bulkPut(await Promise.all(toWrite.map(r => seal('settings', r))));
       return; // merge keeps local settings
     }
+    const sealedWrite = await Promise.all(toWrite.map(r => seal(name, r)));
     if (mode === 'replace') {
-      await db.table(name).bulkPut(toWrite);
+      await db.table(name).bulkPut(sealedWrite);
     } else {
       const existing = await db.table(name).bulkGet(toWrite.map(r => r.id));
-      const winners = toWrite.filter((r, i) => !existing[i] || (r.updatedAt ?? 0) > (existing[i].updatedAt ?? 0));
+      // updatedAt is always a plaintext index field — comparable without decrypting.
+      const winners = sealedWrite.filter((r, i) => !existing[i] || (toWrite[i].updatedAt ?? 0) > (existing[i].updatedAt ?? 0));
       if (winners.length) await db.table(name).bulkPut(winners);
     }
   }
 
-  for await (const line of readNdjsonLines(file)) {
+  for await (const line of makeLines()) {
     const obj = JSON.parse(line);
     if (obj.type !== 'record' || !tableNames.includes(obj.table)) continue;
     if (obj.table === 'settings' && isSecretKey(obj.data.key)) continue;
-    batches[obj.table].push(sanitizeRecord(obj.table, obj.data));
+    const data = sanitizeRecord(obj.table, obj.data);
+    if (obj.table === 'files' && data.text != null) data.hash = await hmacHex(VAULT.hmacKey, data.text);
+    batches[obj.table].push(data);
     await flush(obj.table, false);
   }
   for (const name of tableNames) await flush(name, true);
 }
 
-async function performImport(file, mode) {
+// promptSecret: async (kind) => string|null — used only for the encrypted
+// (.calyx) format when the file wasn't produced by this exact vault.
+async function performImport(file, mode, promptSecret) {
   try {
-    if (!(await sniffGzip(file))) throw new Error('Not a Calyx backup file');
+    if (!VAULT.unlocked) throw new Error('Unlock Calyx before importing');
+    const format = await sniffBackupFormat(file);
+    if (!format) throw new Error('Not a Calyx backup file');
     assertStreamingCompressionSupported();
-    await validateBackupFile(file);
-    await writeBackupFile(file, mode);
+
+    let makeLines;
+    if (format === 'gzip') {
+      makeLines = () => readNdjsonLinesFromStream(file.stream());
+    } else {
+      const { header, headerHashBytes, bodyOffset } = await parseEncHeader(file);
+      if (header.format !== 'calyx-backup') throw new Error('Not a Calyx backup file');
+      if (typeof header.dbSchema === 'number' && header.dbSchema > DB_SCHEMA_VERSION) {
+        throw new Error('Backup was created by a newer version of Calyx; update Calyx first');
+      }
+      const { fileKey, ivPrefix } = await unwrapFileKey(header, promptSecret);
+      makeLines = () => readNdjsonLinesFromStream(streamFromAsyncGenerator(decryptChunks(file, bodyOffset, fileKey, headerHashBytes, ivPrefix)));
+    }
+
+    await validateBackupFile(makeLines);
+    await writeBackupFile(makeLines, mode);
     showToast('Data imported successfully');
     return true;
   } catch (err) {
@@ -1442,7 +2190,7 @@ const IconComponent = {
 /* Settings modal component                                               */
 /* ---------------------------------------------------------------------- */
 const SettingsModal = {
-  props: { settings: { type: Object, required: true } },
+  props: { settings: { type: Object, required: true }, initialSection: { type: String, default: 'general' } },
   emits: ['close', 'update'],
   template: document.getElementById('settings-modal-template').innerHTML,
   setup(props, { emit }) {
@@ -1451,15 +2199,17 @@ const SettingsModal = {
       { id: 'general', label: 'General' },
       { id: 'providers', label: 'Providers & Models' },
       { id: 'memory', label: 'Memory & Context' },
-      { id: 'documents', label: 'Documents & Output' }
+      { id: 'documents', label: 'Documents & Output' },
+      { id: 'security', label: 'Security' }
     ];
-    const section = ref('general');
+    const section = ref(props.initialSection);
+    const security = inject('security');
     function toggleCornerstone(cat) {
       const cur = props.settings.cornerstoneCategories || [];
       const next = cur.includes(cat) ? cur.filter(c => c !== cat) : [...cur, cat];
       emit('update', 'cornerstoneCategories', next);
     }
-    return { memoryCategories, sections, section, toggleCornerstone };
+    return { memoryCategories, sections, section, toggleCornerstone, ...security };
   }
 };
 
@@ -1545,6 +2295,17 @@ const MessageBubble = {
 };
 
 /* ---------------------------------------------------------------------- */
+/* Toasts (module-scoped: shared by the Vue app and the standalone         */
+/* export/import/vault functions above, which run outside setup())         */
+/* ---------------------------------------------------------------------- */
+const toasts = ref([]);
+function showToast(message, type = 'info') {
+  const id = Date.now() + Math.random();
+  toasts.value.push({ id, message, type });
+  setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 3500);
+}
+
+/* ---------------------------------------------------------------------- */
 /* Root application                                                        */
 /* ---------------------------------------------------------------------- */
 const SEGMENT_BUDGET_PCT = 20;
@@ -1553,9 +2314,9 @@ const app = createApp({
   setup() {
     const settings = reactive({ ...DEFAULT_SETTINGS });
     const showSettings = ref(false);
+    const settingsSection = ref('general');
     const sidebarOpen = ref(false);
     const searchQuery = ref('');
-    const toasts = ref([]);
     const memoryCategories = MEMORY_CATEGORIES;
 
     const chats = ref([]);
@@ -1627,13 +2388,6 @@ const app = createApp({
       return { n: idx + 1, date: currentChat.value.createdAt };
     });
 
-    /* ---- Toasts ---- */
-    function showToast(message, type = 'info') {
-      const id = Date.now() + Math.random();
-      toasts.value.push({ id, message, type });
-      setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 3500);
-    }
-
     /* ---- Theme ---- */
     function applyTheme() {
       const isDark = settings.theme === 'dark';
@@ -1646,6 +2400,7 @@ const app = createApp({
       settings[key] = value;
       await persistSetting(key, value);
       if (key === 'theme') applyTheme();
+      if (key === 'autoLockMinutes') resetIdleTimer();
     }
 
     function toggleTheme() {
@@ -1654,33 +2409,33 @@ const app = createApp({
 
     /* ---- Chats CRUD ---- */
     async function refreshChats() {
-      chats.value = await db.chats.toArray();
+      chats.value = await dbToArray('chats');
     }
 
     async function refreshProfiles() {
-      profiles.value = await db.profiles.toArray();
+      profiles.value = await dbToArray('profiles');
     }
 
     async function loadMessages(chatId) {
       messages.value = chatId
-        ? await db.messages.where('chatId').equals(chatId).sortBy('createdAt')
+        ? await dbWhereEquals('messages', 'chatId', chatId, 'createdAt')
         : [];
       await nextTick();
       scrollToBottom();
     }
 
     async function refreshChatMemories() {
-      chatMemories.value = currentChatId.value ? await db.memories.where('chatId').equals(currentChatId.value).toArray() : [];
+      chatMemories.value = currentChatId.value ? await dbWhereEquals('memories', 'chatId', currentChatId.value) : [];
     }
 
     async function refreshSegments() {
-      currentSegments.value = currentChatId.value ? await db.segments.where('chatId').equals(currentChatId.value).sortBy('toAt') : [];
+      currentSegments.value = currentChatId.value ? await dbWhereEquals('segments', 'chatId', currentChatId.value, 'toAt') : [];
     }
 
     async function refreshProfileMemoriesList() {
       if (!currentChat.value?.profileId) { profileMemoriesList.value = []; return; }
       const profileChatIds = chats.value.filter(c => c.profileId === currentChat.value.profileId).map(c => c.id);
-      const all = profileChatIds.length ? await db.memories.where('chatId').anyOf(profileChatIds).toArray() : [];
+      const all = await dbWhereAnyOf('memories', 'chatId', profileChatIds);
       const sel = selectMemoriesForContext({ profileMemories: all, digests: [], settings, queryText: '' });
       const excludedIds = new Set(sel.excluded.map(m => m.id));
       profileMemoriesList.value = all
@@ -1696,7 +2451,7 @@ const app = createApp({
     async function createChat() {
       const now = Date.now();
       const id = crypto.randomUUID();
-      await db.chats.add({
+      await dbAdd('chats', {
         id,
         title: 'New Chat',
         createdAt: now,
@@ -1721,21 +2476,26 @@ const app = createApp({
       const now = Date.now();
       const newChatId = crypto.randomUUID();
       try {
+        const originChat = await dbGet('chats', msg.chatId);
+        if (!originChat || !originChat.profileId) throw new Error('Origin chat is no longer in a profile');
+        const fullMsg = await dbGet('messages', msg.id);
+        const newChatRecord = await seal('chats', { id: newChatId, title: finalTitle, createdAt: now, updatedAt: now, isPinned: false, profileId: originChat.profileId });
+        const decisionMemory = await seal('memories', {
+          id: crypto.randomUUID(), chatId: originChat.id, category: 'decision',
+          content: `Decided on ${fmtUTC(now)} to explore "${finalTitle}" in a separate session: ${proposal.purpose}`,
+          when: null, source: 'user', pinned: false, sourceMessageId: msg.id, createdAt: now, updatedAt: now
+        });
+        const goalMemory = await seal('memories', {
+          id: crypto.randomUUID(), chatId: newChatId, category: 'goal',
+          content: `Session opened from session "${originChat.title}" on ${fmtUTC(now)} to explore: ${proposal.purpose}`,
+          when: null, source: 'user', pinned: false, sourceMessageId: null, createdAt: now, updatedAt: now
+        });
+        const updatedMsg = await seal('messages', { ...fullMsg, sessionProposal: { ...proposal, title: finalTitle, status: 'created', chatId: newChatId } });
         await db.transaction('rw', db.chats, db.memories, db.messages, async () => {
-          const originChat = await db.chats.get(msg.chatId);
-          if (!originChat || !originChat.profileId) throw new Error('Origin chat is no longer in a profile');
-          await db.chats.add({ id: newChatId, title: finalTitle, createdAt: now, updatedAt: now, isPinned: false, profileId: originChat.profileId });
-          await db.memories.add({
-            id: crypto.randomUUID(), chatId: originChat.id, category: 'decision',
-            content: `Decided on ${fmtUTC(now)} to explore "${finalTitle}" in a separate session: ${proposal.purpose}`,
-            when: null, source: 'user', pinned: false, sourceMessageId: msg.id, createdAt: now, updatedAt: now
-          });
-          await db.memories.add({
-            id: crypto.randomUUID(), chatId: newChatId, category: 'goal',
-            content: `Session opened from session "${originChat.title}" on ${fmtUTC(now)} to explore: ${proposal.purpose}`,
-            when: null, source: 'user', pinned: false, sourceMessageId: null, createdAt: now, updatedAt: now
-          });
-          await db.messages.update(msg.id, { sessionProposal: { ...proposal, title: finalTitle, status: 'created', chatId: newChatId } });
+          await db.chats.add(newChatRecord);
+          await db.memories.add(decisionMemory);
+          await db.memories.add(goalMemory);
+          await db.messages.put(updatedMsg);
         });
         updateMessageProposal(msg.id, { title: finalTitle, status: 'created', chatId: newChatId });
         await refreshChats();
@@ -1747,7 +2507,8 @@ const app = createApp({
 
     async function dismissSessionProposal(msg) {
       if (!msg.sessionProposal || msg.sessionProposal.status !== 'pending') return;
-      await db.messages.update(msg.id, { sessionProposal: { ...msg.sessionProposal, status: 'dismissed' } });
+      const fullMsg = await dbGet('messages', msg.id);
+      await dbPut('messages', { ...fullMsg, sessionProposal: { ...msg.sessionProposal, status: 'dismissed' } });
       updateMessageProposal(msg.id, { status: 'dismissed' });
     }
 
@@ -1762,7 +2523,7 @@ const app = createApp({
       pendingDocIds.value = [];
       showSegmentsViewer.value = false;
       memoryTab.value = 'session';
-      chatFiles.value = id ? await db.files.where('chatId').equals(id).sortBy('createdAt') : [];
+      chatFiles.value = id ? await dbWhereEquals('files', 'chatId', id, 'createdAt') : [];
       await loadMessages(id);
       await refreshChatMemories();
       await refreshSegments();
@@ -1772,12 +2533,12 @@ const app = createApp({
     }
 
     async function renameChat(chat, title) {
-      await db.chats.update(chat.id, { title, updatedAt: Date.now() });
+      await dbPut('chats', { ...chat, title, updatedAt: Date.now() });
       await refreshChats();
     }
 
     async function togglePin(chat) {
-      await db.chats.update(chat.id, { isPinned: !chat.isPinned, updatedAt: Date.now() });
+      await dbUpdatePlainWhere('chats', 'id', chat.id, { isPinned: !chat.isPinned, updatedAt: Date.now() });
       await refreshChats();
     }
 
@@ -1836,9 +2597,9 @@ const app = createApp({
       if (!name) { showToast('Profile name is required', 'error'); return; }
       const now = Date.now();
       if (editingProfile.value) {
-        await db.profiles.update(editingProfile.value.id, { name, systemPrompt: profilePromptDraft.value, updatedAt: now });
+        await dbPut('profiles', { ...editingProfile.value, name, systemPrompt: profilePromptDraft.value, updatedAt: now });
       } else {
-        await db.profiles.add({ id: crypto.randomUUID(), name, systemPrompt: profilePromptDraft.value, createdAt: now, updatedAt: now });
+        await dbAdd('profiles', { id: crypto.randomUUID(), name, systemPrompt: profilePromptDraft.value, createdAt: now, updatedAt: now });
       }
       showProfileEditor.value = false;
       await refreshProfiles();
@@ -1864,7 +2625,7 @@ const app = createApp({
           currentSegments.value = [];
         }
       } else {
-        await db.chats.where('profileId').equals(profile.id).modify({ profileId: null, updatedAt: Date.now() });
+        await dbUpdatePlainWhere('chats', 'profileId', profile.id, { profileId: null, updatedAt: Date.now() });
       }
       await db.profiles.delete(profile.id);
       showProfileEditor.value = false;
@@ -1873,7 +2634,7 @@ const app = createApp({
     }
 
     async function setChatProfile(chat, profileId) {
-      await db.chats.update(chat.id, { profileId, updatedAt: Date.now() });
+      await dbUpdatePlainWhere('chats', 'id', chat.id, { profileId, updatedAt: Date.now() });
       await refreshChats();
     }
 
@@ -1887,7 +2648,7 @@ const app = createApp({
       const content = newMemoryContent.value.trim();
       if (!content || !currentChatId.value) return;
       const now = Date.now();
-      await db.memories.add({
+      await dbAdd('memories', {
         id: crypto.randomUUID(), chatId: currentChatId.value, category: newMemoryCategory.value,
         when: newMemoryWhen.value.trim() || null, source: 'manual', content, pinned: false,
         sourceMessageId: null, createdAt: now, updatedAt: now
@@ -1903,13 +2664,13 @@ const app = createApp({
     }
 
     async function commitMemoryEdit(m) {
-      await db.memories.update(m.id, { content: memoryDraft.value.trim(), updatedAt: Date.now() });
+      await dbPut('memories', { ...m, content: memoryDraft.value.trim(), updatedAt: Date.now() });
       editingMemoryId.value = null;
       await refreshChatMemories();
     }
 
     async function toggleMemoryPin(m) {
-      await db.memories.update(m.id, { pinned: !m.pinned, updatedAt: Date.now() });
+      await dbUpdatePlainWhere('memories', 'id', m.id, { pinned: !m.pinned, updatedAt: Date.now() });
       await refreshChatMemories();
     }
 
@@ -1921,11 +2682,11 @@ const app = createApp({
 
     /* ---- Digests ---- */
     async function generateDigestForChat(chatId) {
-      const chatMsgs = await db.messages.where('chatId').equals(chatId).sortBy('createdAt');
+      const chatMsgs = await dbWhereEquals('messages', 'chatId', chatId, 'createdAt');
       if (!chatMsgs.length) return;
-      const existingDigest = await db.digests.get(chatId);
+      const existingDigest = await dbGet('digests', chatId);
       const since = existingDigest ? existingDigest.coversUntilAt : 0;
-      const allSegs = await db.segments.where('chatId').equals(chatId).sortBy('toAt');
+      const allSegs = await dbWhereEquals('segments', 'chatId', chatId, 'toAt');
       const newSegs = allSegs.filter(s => s.toAt > since);
       const lastSegToAt = allSegs.length ? allSegs[allSegs.length - 1].toAt : 0;
       const rawAfterSegs = chatMsgs.filter(m => m.createdAt > Math.max(since, lastSegToAt));
@@ -1934,14 +2695,14 @@ const app = createApp({
       if (!newContent.trim()) return;
       const result = await callUtilityModel(digestPrompt(existingDigest?.content, newContent), settings);
       const now = Date.now();
-      await db.digests.put({ id: chatId, chatId, content: result, coversUntilAt: chatMsgs[chatMsgs.length - 1].createdAt, createdAt: existingDigest?.createdAt || now, updatedAt: now });
+      await dbPut('digests', { id: chatId, chatId, content: result, coversUntilAt: chatMsgs[chatMsgs.length - 1].createdAt, createdAt: existingDigest?.createdAt || now, updatedAt: now });
     }
 
     async function ensureDigestFresh(chatId) {
-      const chatMsgs = await db.messages.where('chatId').equals(chatId).sortBy('createdAt');
+      const chatMsgs = await dbWhereEquals('messages', 'chatId', chatId, 'createdAt');
       if (!chatMsgs.length) return;
       const lastAt = chatMsgs[chatMsgs.length - 1].createdAt;
-      const digest = await db.digests.get(chatId);
+      const digest = await dbGet('digests', chatId);
       if (digest && digest.coversUntilAt >= lastAt) return;
       await generateDigestForChat(chatId);
     }
@@ -1969,7 +2730,7 @@ const app = createApp({
       const transcript = toSummarize.map(m => `${m.role}: ${m.content}`).join('\n\n');
       const summary = await callUtilityModel(segmentSummaryPrompt(transcript), settings);
       const now = Date.now();
-      await db.segments.add({
+      await dbAdd('segments', {
         id: crypto.randomUUID(), chatId: currentChatId.value, content: summary,
         fromMessageId: toSummarize[0].id, toMessageId: toSummarize[toSummarize.length - 1].id,
         fromAt: toSummarize[0].createdAt, toAt: toSummarize[toSummarize.length - 1].createdAt,
@@ -1982,14 +2743,15 @@ const app = createApp({
         const [a, b] = currentSegments.value;
         const merged = await callUtilityModel(segmentMergePrompt(a.content, b.content), settings);
         const mnow = Date.now();
+        const mergedRecord = await seal('segments', {
+          id: crypto.randomUUID(), chatId: currentChatId.value, content: merged,
+          fromMessageId: a.fromMessageId, toMessageId: b.toMessageId,
+          fromAt: a.fromAt, toAt: b.toAt, tokens: estimateTokens(merged), createdAt: a.createdAt, updatedAt: mnow
+        });
         await db.transaction('rw', db.segments, async () => {
           await db.segments.delete(a.id);
           await db.segments.delete(b.id);
-          await db.segments.add({
-            id: crypto.randomUUID(), chatId: currentChatId.value, content: merged,
-            fromMessageId: a.fromMessageId, toMessageId: b.toMessageId,
-            fromAt: a.fromAt, toAt: b.toAt, tokens: estimateTokens(merged), createdAt: a.createdAt, updatedAt: mnow
-          });
+          await db.segments.add(mergedRecord);
         });
         await refreshSegments();
       }
@@ -2024,7 +2786,7 @@ const app = createApp({
         await Promise.all(otherChats.map(c => ensureDigestFresh(c.id).catch(() => {})));
 
         const otherChatIds = otherChats.map(c => c.id);
-        const digestRows = otherChatIds.length ? await db.digests.where('chatId').anyOf(otherChatIds).toArray() : [];
+        const digestRows = await dbWhereAnyOf('digests', 'chatId', otherChatIds);
         const digestByChat = new Map(digestRows.map(d => [d.chatId, d]));
         if (digestRows.length) {
           otherDigestsBlock = `<session_digests>\n${otherChats.filter(c => digestByChat.has(c.id)).map(c => {
@@ -2033,7 +2795,7 @@ const app = createApp({
           }).join('\n')}\n</session_digests>`;
         }
 
-        const otherMemories = otherChatIds.length ? await db.memories.where('chatId').anyOf(otherChatIds).toArray() : [];
+        const otherMemories = await dbWhereAnyOf('memories', 'chatId', otherChatIds);
         const sel = selectMemoriesForContext({ profileMemories: otherMemories, digests: digestRows, settings, queryText });
         overCapWarned = sel.overCap;
 
@@ -2141,7 +2903,7 @@ const app = createApp({
 
     async function addChatFile(name, type, rawText) {
       const text = normalizeText(rawText);
-      const hash = await sha256(text);
+      const hash = await hmacHex(VAULT.hmacKey, text);
       if (chatFiles.value.some(f => f.hash === hash)) {
         showToast(`Duplicate content skipped: ${name}`, 'error');
         return;
@@ -2149,7 +2911,7 @@ const app = createApp({
       const tokens = estimateTokens(text);
       const now = Date.now();
       const record = { id: crypto.randomUUID(), chatId: currentChatId.value, name, type, hash, text, tokens, createdAt: now, updatedAt: now };
-      await db.files.add(record);
+      await dbAdd('files', record);
       chatFiles.value.push(record);
       pendingDocIds.value.push(record.id);
       if (chatFilesTokens.value > settings.docTokenWarn) {
@@ -2225,7 +2987,7 @@ const app = createApp({
           ...attachments.value.map(a => ({ type: a.type, name: a.name }))
         ]
       };
-      await db.messages.add(userMsg);
+      await dbAdd('messages', userMsg);
       messages.value.push(userMsg);
 
       const autoTitleSource = content;
@@ -2288,7 +3050,7 @@ const app = createApp({
             source: f.source, content: f.content, pinned: false, sourceMessageId: asstMsgId,
             createdAt: asstNow, updatedAt: asstNow
           }));
-          await db.memories.bulkAdd(memRecords);
+          await dbBulkAdd('memories', memRecords);
           memoryIds = memRecords.map(r => r.id);
         }
 
@@ -2303,9 +3065,9 @@ const app = createApp({
           memoryIds,
           sessionProposal: proposal
         };
-        await db.messages.add(asstMsg);
+        await dbAdd('messages', asstMsg);
         messages.value.push(asstMsg);
-        await db.chats.update(currentChatId.value, { updatedAt: Date.now() });
+        await dbUpdatePlainWhere('chats', 'id', currentChatId.value, { updatedAt: Date.now() });
         await refreshChats();
         if (memoryIds.length) await refreshChatMemories();
 
@@ -2351,7 +3113,7 @@ const app = createApp({
       pendingImportFile.value = null;
       if (!file) return;
 
-      const ok = await performImport(file, mode);
+      const ok = await performImport(file, mode, promptImportSecret);
       if (!ok) return;
 
       const loaded = await loadSettingsFromDb();
@@ -2367,20 +3129,233 @@ const app = createApp({
       currentSegments.value = [];
     }
 
-    onMounted(async () => {
+    /* ---- Vault / encryption lock state machine ---- */
+    const vaultState = ref('detecting');
+    const migrationProgress = ref('');
+    const migrationError = ref('');
+    const unlockSecret = ref('');
+    const unlockError = ref('');
+    const showFirstRunPasswordForm = ref(false);
+    const recoveryKeyDisplay = ref(null);
+    const emptySecurityForm = { newPassword: '', confirmPassword: '', currentSecret: '', regenerateSecret: '', removePasswordSecret: '', error: '' };
+    const securityForm = reactive({ ...emptySecurityForm });
+    const hasPasswordProtection = ref(false);
+    const importSecretPrompt = ref(null);
+    const exportPasswordPrompt = ref(null);
+    const minPasswordLength = MIN_PASSWORD_LENGTH;
+    let idleTimer = null;
+
+    function clearIdleTimer() { if (idleTimer) clearTimeout(idleTimer); idleTimer = null; }
+    function resetIdleTimer() {
+      clearIdleTimer();
+      if (vaultState.value !== 'ready' || !hasPasswordProtection.value || !settings.autoLockMinutes) return;
+      idleTimer = setTimeout(() => lockVaultNow(), settings.autoLockMinutes * 60000);
+    }
+
+    async function loadPreUnlockTheme() {
+      const row = await db.settings.get('theme');
+      if (row) { settings.theme = row.value; applyTheme(); }
+    }
+
+    async function afterUnlock() {
+      const kr = await loadKeyring();
+      hasPasswordProtection.value = hasPasswordSlot(kr);
       const loaded = await loadSettingsFromDb();
       Object.assign(settings, loaded);
       applyTheme();
-      // Configure PDF.js worker
+      await refreshProfiles();
+      await refreshChats();
+      vaultState.value = 'ready';
+      resetIdleTimer();
+    }
+
+    function lockVaultNow() {
+      lockVault();
+      chats.value = []; profiles.value = []; currentChatId.value = null; messages.value = [];
+      chatMemories.value = []; currentSegments.value = []; chatFiles.value = []; pendingDocIds.value = [];
+      showSettings.value = false; showMemoryPanel.value = false;
+      recoveryKeyDisplay.value = null; Object.assign(securityForm, emptySecurityForm);
+      clearIdleTimer();
+      vaultState.value = 'locked';
+    }
+
+    // Runs after any successful unlock (device slot or password/recovery) to
+    // catch a migration that was interrupted by a prior crash — the keyring
+    // already exists at that point, so detectVaultState() alone can't tell.
+    async function resumeMigrationIfNeeded() {
+      if (!(await hasUnsealedRecords())) return;
+      vaultState.value = 'migrating';
+      try {
+        await sealRemainingPlaintextRecords((table, count) => { migrationProgress.value = `${table}: ${count} records`; });
+      } catch (err) {
+        migrationError.value = err.message;
+        vaultState.value = 'migration-failed';
+        throw err;
+      }
+    }
+
+    async function initVault() {
+      const state = await detectVaultState();
+      if (state === 'first-run') {
+        vaultState.value = 'first-run';
+      } else if (state === 'migrate') {
+        vaultState.value = 'migrating';
+        try {
+          await migratePlaintextDatabase((table, count) => { migrationProgress.value = `${table}: ${count} records`; });
+          await afterUnlock();
+        } catch (err) {
+          migrationError.value = err.message;
+          vaultState.value = 'migration-failed';
+        }
+      } else if (state === 'auto-unlock') {
+        const kr = await loadKeyring();
+        await unlockWithDeviceSlot(kr);
+        try {
+          await resumeMigrationIfNeeded();
+        } catch { return; }
+        await afterUnlock();
+      } else {
+        vaultState.value = 'locked';
+      }
+    }
+
+    async function continueWithoutPassword() {
+      await createKeyringNoPassword();
+      await afterUnlock();
+    }
+
+    async function submitFirstRunSetPassword() {
+      securityForm.error = '';
+      if (securityForm.newPassword !== securityForm.confirmPassword) { securityForm.error = 'Passwords do not match'; return; }
+      try {
+        validatePasswordLength(securityForm.newPassword);
+        const msBytes = randomBytes(32);
+        const kid = crypto.randomUUID();
+        const recoveryKey = generateRecoveryKey();
+        const passwordSlot = await buildSecretSlot('password', securityForm.newPassword, msBytes);
+        const recoverySlot = await buildSecretSlot('recovery', recoveryKey, msBytes);
+        await saveKeyring({ kid, slots: [passwordSlot, recoverySlot] });
+        await deriveVaultKeys(msBytes, kid);
+        securityForm.newPassword = ''; securityForm.confirmPassword = '';
+        recoveryKeyDisplay.value = recoveryKey;
+        vaultState.value = 'show-recovery';
+      } catch (err) {
+        securityForm.error = err.message;
+      }
+    }
+
+    async function finishFirstRunRecovery() {
+      recoveryKeyDisplay.value = null;
+      await afterUnlock();
+    }
+
+    async function submitUnlock() {
+      unlockError.value = '';
+      try {
+        const kr = await loadKeyring();
+        const ok = await unlockWithSecret(kr, unlockSecret.value);
+        if (!ok) { unlockError.value = 'Incorrect password or recovery key'; return; }
+        unlockSecret.value = '';
+        try {
+          await resumeMigrationIfNeeded();
+        } catch { return; }
+        await afterUnlock();
+      } catch (err) {
+        unlockError.value = err.message;
+      }
+    }
+
+    async function submitSetPassword() {
+      securityForm.error = '';
+      if (securityForm.newPassword !== securityForm.confirmPassword) { securityForm.error = 'Passwords do not match'; return; }
+      try {
+        const recoveryKey = await setPassword(securityForm.newPassword);
+        hasPasswordProtection.value = true;
+        securityForm.newPassword = ''; securityForm.confirmPassword = '';
+        recoveryKeyDisplay.value = recoveryKey;
+        resetIdleTimer();
+      } catch (err) {
+        securityForm.error = err.message;
+      }
+    }
+
+    async function submitChangePassword() {
+      securityForm.error = '';
+      if (securityForm.newPassword !== securityForm.confirmPassword) { securityForm.error = 'Passwords do not match'; return; }
+      try {
+        await changePassword(securityForm.currentSecret, securityForm.newPassword);
+        securityForm.currentSecret = ''; securityForm.newPassword = ''; securityForm.confirmPassword = '';
+        showToast('Password changed');
+      } catch (err) {
+        securityForm.error = err.message;
+      }
+    }
+
+    async function submitRemovePassword() {
+      securityForm.error = '';
+      try {
+        await removePassword(securityForm.removePasswordSecret);
+        securityForm.removePasswordSecret = '';
+        hasPasswordProtection.value = false;
+        clearIdleTimer();
+        showToast('Password removed');
+      } catch (err) {
+        securityForm.error = err.message;
+      }
+    }
+
+    async function submitRegenerateRecoveryKey() {
+      securityForm.error = '';
+      try {
+        recoveryKeyDisplay.value = await regenerateRecoveryKey(securityForm.regenerateSecret);
+        securityForm.regenerateSecret = '';
+      } catch (err) {
+        securityForm.error = err.message;
+      }
+    }
+
+    function copyRecoveryKey() {
+      navigator.clipboard.writeText(recoveryKeyDisplay.value);
+      showToast('Recovery key copied');
+    }
+
+    function downloadRecoveryKey() {
+      const blob = new Blob([recoveryKeyDisplay.value], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'calyx-recovery-key.txt'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function promptImportSecret(kind) {
+      return new Promise(resolve => {
+        importSecretPrompt.value = { kind, value: '', resolve: (val) => { importSecretPrompt.value = null; resolve(val || null); } };
+      });
+    }
+
+    function promptExportPasswordFn() {
+      return new Promise(resolve => {
+        exportPasswordPrompt.value = { value: '', resolve: (val) => { exportPasswordPrompt.value = null; resolve(val || null); } };
+      });
+    }
+
+    provide('security', {
+      hasPasswordProtection, recoveryKeyDisplay, securityForm,
+      submitSetPassword, submitChangePassword, submitRemovePassword, submitRegenerateRecoveryKey,
+      copyRecoveryKey, downloadRecoveryKey
+    });
+
+    onMounted(async () => {
+      await loadPreUnlockTheme();
       if (typeof pdfjsLib !== 'undefined') {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.worker.min.js';
       }
-      await refreshProfiles();
-      await refreshChats();
+      ['mousedown', 'keydown', 'touchstart', 'scroll'].forEach(evt => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+      await initVault();
     });
 
     return {
-      settings, showSettings, sidebarOpen, searchQuery, toasts, memoryCategories,
+      settings, showSettings, settingsSection, sidebarOpen, searchQuery, toasts, memoryCategories,
       chats, chatIds, profiles, currentChatId, currentChat, messages,
       groupedChats, currentSessionInfo,
       chatMemories, chatMemoriesDesc, currentSegments, showSegmentsViewer, compacting,
@@ -2400,7 +3375,13 @@ const app = createApp({
       refreshProfileMemoriesList, compactNow,
       triggerImportInput, handleImportFile, cancelImport, confirmImport,
       sendMessage, triggerFileInput, handleFiles, removeAttachment, removeChatFile, autoResizeInput,
-      renderMarkdown, fmtLocal
+      renderMarkdown, fmtLocal,
+      vaultState, migrationProgress, migrationError, unlockSecret, unlockError,
+      showFirstRunPasswordForm, recoveryKeyDisplay, securityForm,
+      hasPasswordProtection, importSecretPrompt, exportPasswordPrompt, minPasswordLength,
+      continueWithoutPassword, submitFirstRunSetPassword, finishFirstRunRecovery, submitUnlock,
+      submitSetPassword, submitChangePassword, submitRemovePassword, submitRegenerateRecoveryKey,
+      copyRecoveryKey, downloadRecoveryKey, promptImportSecret, promptExportPasswordFn, lockVaultNow
     };
   }
 });

@@ -121,9 +121,18 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
   * Light/dark theme toggle (persisted).
 
 * **Data Portability:**
-  * **Full export:** Every stored table — chats, messages, files, settings, and any future table added to the database — is streamed into a single gzip-compressed NDJSON backup file (`calyx-backup-<timestamp>.ndjson.gz`), with no size-driven memory ceiling. API keys and any other credential-shaped field (tokens, secrets, passwords, authorization headers) are always excluded.
-  * **Full import:** Restore from a Calyx backup in two modes — **Replace** (wipe local data and restore from the file) or **Merge** (add file records to local data, newest `updatedAt` wins on conflict). API keys are never imported; your locally configured keys are always kept.
+  * **Full export:** Every stored table — chats, messages, files, settings, and any future table added to the database — is streamed into a single encrypted `.calyx` backup file (`calyx-backup-<timestamp>.calyx`), with no size-driven memory ceiling. API keys and any other credential-shaped field (tokens, secrets, passwords, authorization headers) are always excluded.
+  * **Full import:** Restore from a Calyx backup in two modes — **Replace** (wipe local data and restore from the file) or **Merge** (add file records to local data, newest `updatedAt` wins on conflict). API keys are never imported; your locally configured keys are always kept. Legacy plaintext `.ndjson.gz` backups from older Calyx versions can still be imported (read-only; re-encrypted on write).
   * The backup file is validated end-to-end (format, schema compatibility, record integrity) before any data is written, and the browser's native "Save As" dialog is used where supported so you choose exactly where backups are written.
+
+* **Encryption at Rest:**
+  * All chat content, memories, files, and settings (except theme) are encrypted in IndexedDB with AES-GCM-256, always — there is no unencrypted mode.
+  * **First launch:** a one-time screen offers "Set password (recommended)" or "Continue without password" — either choice can be changed later in Settings → Security with no data re-encryption, only the key wrapping changes.
+  * **Password optional:** by default the encryption key is stored on-device so Calyx opens instantly, same as before; a "Not protected" indicator shows in the sidebar. This protects your data if the browser profile/files are copied or inspected directly (e.g. disk image, cloud sync), but **not** against anyone who can open this browser profile on this device — there is no unlock prompt in this mode.
+  * **Recovery key:** shown once when a password is set; it's the only way to recover your data if the password is forgotten. Losing both the password and the recovery key makes the data permanently unrecoverable — there is no backdoor.
+  * **Unlock & auto-lock:** password mode prompts for the password or recovery key on every reload, with a manual Lock button and an idle auto-lock timer (default 15 minutes, configurable, password mode only).
+  * **Encrypted exports:** backup files are always encrypted — with your account password/recovery key (password mode) or a one-time export password you set at export time (no-password mode).
+  * Existing installs upgrade automatically on first load of this version; data is sealed in place with no prompt, keeping the no-password default until you opt in to a password.
 
 * **Feedback:**
   * Toast notifications for errors and confirmations.
@@ -223,9 +232,6 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
   * Settings: configurable base URL (default `http://localhost:1234/v1`), optional API key, and free-text model name.
   * Supports `localhost`, LAN IPs/hostnames, and publicly resolvable hostnames — enabling on-machine, LAN-hosted, or remotely reachable local-model servers.
 
-* **Hardened Data Encryption:**
-  * Optional master-password database encryption using Web Crypto API (AES-GCM) to encrypt stored API keys and chat archives at rest.
-
 * **Remote Storage Sync (Cloud/Self-Hosted):**
   * Multi-device synchronization using Origin Private File System (OPFS) combined with WebDAV or S3-compatible APIs (Google Drive, OneDrive, AWS, self-hosted).
   * Syncs individual chat files rather than a monolithic database to gracefully handle offline usage and merge conflicts.
@@ -237,11 +243,13 @@ Phase 1 (Core MVP — done) ──> Phase 2 (Power UX) ──> Phase 3a (Profile
 
 These rules are non-negotiable for all future development iterations and must be enforced at every phase.
 
-* **Export/Import Parity:** The backup pipeline iterates all Dexie tables generically — any new table or field is included automatically with no code change required. The only permitted exclusion is secret-shaped fields (API keys, tokens, passwords, authorization headers), which are stripped on export and ignored on import by a central pattern-based registry (see `plans/architecture.md` §7.1). No non-secret setting may exist that cannot round-trip through a backup file.
+* **Export/Import Parity:** The backup pipeline iterates all Dexie tables generically — any new table or field is included automatically with no code change required. The only permitted exclusions are secret-shaped fields (API keys, tokens, passwords, authorization headers), stripped on export and ignored on import by a central pattern-based registry, and the `vault` table (encryption keyring), which never leaves the device (see `plans/architecture.md` §7.1, §9.5). No non-secret setting may exist that cannot round-trip through a backup file.
 * **Remote Sync Coverage:** Every setting and piece of user content must be included in the remote sync payload when a remote storage target is configured. Partial sync is not permitted.
 * **Minimal HTML Footprint:** `index.html` must remain as small as possible. Heavy libraries, renderers, and optional features must be loaded dynamically from CDNs at runtime — never bundled inline.
 * **Pinned CDN Versions:** All CDN dependencies must reference a specific, immutable version (e.g., `@1.2.3`). Unpinned or `@latest` references are prohibited to prevent upstream breaking changes.
 * **Offline Resilience:** Core functionality must remain operational without network access. CDN-loaded assets must degrade gracefully or be cached; the user must never be left with a broken interface due to a failed CDN fetch.
 * **Local Storage as Source of Truth:** IndexedDB is the canonical data store. Remote storage is a synchronization target only — it never overrides local state without explicit user action.
-* **Mandatory Client-Side Encryption:** Everything synced to remote storage must be encrypted client-side (AES-GCM via Web Crypto API) before transmission. No plaintext user data may leave the browser.
+* **Mandatory Encryption at Rest:** Every IndexedDB record is encrypted (AES-GCM-256 via Web Crypto API) except a small set of plaintext index fields needed for querying and the `theme` setting — see `plans/encryption.md`. This applies regardless of whether a password is set; password status only changes how the underlying key is protected, never whether data is encrypted.
+* **Mandatory Client-Side Encryption (Sync/Export):** Everything synced to remote storage or written to a backup file must be encrypted client-side (AES-GCM via Web Crypto API) before transmission or disk write. No plaintext user data may leave the browser.
+* **Data-Access Layer Only:** All reads/writes of encrypted tables must go through the `seal`/`open` envelope helpers and their `db*` wrappers (`dbGet`, `dbAdd`, `dbPut`, `dbPatch`, etc.) — never raw `db.<table>.get/put/add` on encrypted fields. Future tables are encrypted by default; only `id`/`updatedAt` are plaintext unless explicitly added to `PLAIN_FIELDS`.
 * **Native-First Dependencies:** Prefer native browser APIs and ES module patterns over adding new external libraries. Every new dependency must be justified against an equivalent native implementation.

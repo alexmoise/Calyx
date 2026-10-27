@@ -11,7 +11,9 @@
 *   **PDF Parsing:** PDF.js (via CDN) for client-side text extraction.
 
 ## 2. Storage Schema (IndexedDB / Dexie)
-Database name: **`Calyx`** (schema version 2). The legacy `CalyxDB` (integer `++id` keys) is migrated once on boot — see §9.4 — and deleted after a verified copy.
+Database name: **`Calyx`** (schema version 3). The legacy `CalyxDB` (integer `++id` keys) is migrated once on boot — see §9.4 — and deleted after a verified copy.
+
+**Encryption at rest (schema v3+):** Every table except `vault` stores records as an envelope — a small set of plaintext index fields (needed for Dexie `where()` queries) plus one encrypted blob (`enc: { v, kid, iv, ct }`, AES-GCM-256) holding everything else. See `plans/encryption.md` for the full key hierarchy, migration, and backup format. The **`vault`** table (`key` primary key, single row `'keyring'`) holds the keyring — wrapped master-secret slots (password/recovery/device) — and is never included in export/import or future remote sync.
 
 *   **`id`** fields across all tables are **string UUIDs** (`crypto.randomUUID()`), not auto-increment integers. This allows records from independent databases (imports, future sync) to merge without ID collisions.
 *   Every mutable record carries an **`updatedAt`** timestamp (ms epoch), used for last-write-wins conflict resolution on import merge and future remote sync.
@@ -35,8 +37,9 @@ Database name: **`Calyx`** (schema version 2). The legacy `CalyxDB` (integer `++
     *   `memoryBudgetPct` (default `30`, % of `contextBudget`) — caps how many profile memories are injected per turn
     *   `cornerstoneCategories` (default `['trait','value','goal','agreement']`) — memory categories always included regardless of budget
     *   `branchSessions` (default `true`) — whether the model may propose a new session for a drifting topic, see §7.8
+    *   `autoLockMinutes` (default `15`, `0` = off) — idle auto-lock timeout, password mode only; see `plans/encryption.md` §6
 
-**Future tables** (agents, MCP server definitions, skills, to-dos, etc.) must declare an `id` (UUID) primary key and an `updatedAt` field to automatically participate in export/import/sync — see §9.
+**Future tables** (agents, MCP server definitions, skills, to-dos, etc.) must declare an `id` (UUID) primary key and an `updatedAt` field to automatically participate in export/import/sync — see §9. New fields on existing tables are encrypted by default (see §2); add to `PLAIN_FIELDS` only if genuinely needed as a Dexie index.
 
 ## 3. Model API Abstraction Layer
 A unified class/functions to handle API communication, supporting **streaming** for all providers.
@@ -142,14 +145,17 @@ Any object key (including nested, e.g. a future MCP server's `headers.Authorizat
 **When adding any new secret-bearing field** (API keys, MCP server auth tokens/headers, future OAuth tokens, etc.), name it so it ends in `apiKey`, `Token`, `Secret`, `Password`, or `Authorization` to be covered automatically. If a field cannot be named this way, it must be added explicitly to the registry in `index.html` and documented here.
 
 ### 9.2 Backup File Format
-NDJSON, one JSON object per line, gzip-compressed:
+Current format is an **encrypted `.calyx` container** (magic bytes, plaintext JSON header, chunked AES-GCM ciphertext). The plaintext payload inside is the same gzip NDJSON stream as before:
 ```
-{"type":"header","format":"calyx-backup","version":4,"dbSchema":2,"exportedAt":"…"}
+{"type":"header","format":"calyx-backup","version":5,"dbSchema":3,"exportedAt":"…"}
 {"type":"record","table":"chats","data":{…}}
 …
 {"type":"footer","counts":{"chats":N,"messages":N,…}}
 ```
-The footer's per-table counts are checked against the records actually read during import validation, catching truncated/corrupt files before any write occurs.
+The footer's per-table counts are checked against the records actually read during import validation, catching truncated/corrupt files before any write occurs. Full encryption/key-wrapping spec: `plans/encryption.md` §8.
 
 ### 9.3 Import Pipeline
-Two-pass: (1) full-file validation (header format/schema version, record shape, footer count match) with zero writes; (2) batched (500 records) `bulkPut` writes in a Replace or Merge transaction. See `plans/import-export.md` for the full flow diagram. Records are passed through `sanitizeRecord` (secret stripping + removal of the retired `chats.systemPrompt` field) so older backups import cleanly against the current schema. Only the current gzip NDJSON format (`calyx-backup`) is accepted; the one-time legacy `CalyxDB` migration and legacy plain-JSON import path were removed after confirming no deployment still depended on them.
+Two-pass: (1) full-file validation (header format/schema version, record shape, footer count match) with zero writes; (2) batched (500 records) `bulkPut` writes (sealed with the local vault's keys) in a Replace or Merge transaction. See `plans/import-export.md` for the full flow diagram and `plans/encryption.md` §9 for the encrypted-format unwrap flow. Records are passed through `sanitizeRecord` (secret stripping + removal of the retired `chats.systemPrompt` field) so older backups import cleanly against the current schema. Two formats are accepted: the current encrypted `.calyx` container, and the legacy plaintext gzip NDJSON (`calyx-backup` v4) format for read-only migration off older Calyx versions. The one-time legacy `CalyxDB` migration and legacy plain-JSON (v2) import path were removed after confirming no deployment still depended on them.
+
+### 9.4 Encryption Exclusions
+The `vault` table (encryption keyring) is excluded from the generic export/import table loop — it never leaves the device and has no portable meaning across instances with different keys. See `plans/encryption.md` for the full key hierarchy, record envelope, migration, and backup encryption design.

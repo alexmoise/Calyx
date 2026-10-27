@@ -12,7 +12,7 @@
 | B2 | Export saves via `showSaveFilePicker` (Chromium) with `<a download>` fallback |
 | D6 | Merge conflict: **newer wins** (`updatedAt ?? createdAt`) |
 | D7 | Merge keeps local settings; Replace overwrites (except secrets) |
-| — | No encryption now (Phase 4) |
+| — | ~~No encryption now (Phase 4)~~ **Superseded:** encryption at rest + encrypted backups delivered — see [`plans/encryption.md`](encryption.md) |
 
 ## Core Principle: Generic, Table-Agnostic Pipeline
 Export/import iterates `db.tables` — no hardcoded table list. Future tables (`agents`, `memories`, `mcpServers`, `todos`, `skills`, …) round-trip automatically. Only per-table metadata needed: secret fields (registry) and parent-reference fields (for legacy remap only).
